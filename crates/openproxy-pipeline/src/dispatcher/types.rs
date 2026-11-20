@@ -99,8 +99,14 @@ pub(crate) struct NonStreamingSuccessArgs {
     pub response_headers: Option<std::collections::BTreeMap<String, String>>,
     pub response_body_raw: serde_json::Value,
     pub openai_response: crate::translation::OpenAIResponse,
-    /// Which fields were synthesized rather than reported by the upstream.
-    pub usage_estimated: (bool, bool),
+    /// Usage as filled by `ensure_usage_populated`, captured *before* the
+    /// client-only system-prefix discount. The tracker persists observed
+    /// fields from `usage_fill.observed`; this snapshot is the fallback for
+    /// synthesized fields so the record never reads the adjusted wire.
+    pub recorded_usage: Option<crate::translation::OpenAIUsage>,
+    /// Which usage fields were synthesized and the observed upstream
+    /// snapshot that must be persisted without client-only adjustments.
+    pub usage_fill: super::translation::UsageFill,
 }
 
 /// `UpstreamRequest` ya construido por `setup_upstream_request_and_context`.

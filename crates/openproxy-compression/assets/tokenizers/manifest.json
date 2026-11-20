@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "description": "Pinned public tokenizer artifacts used by openproxy-compression. Large vocabularies are never committed: run scripts/fetch_tokenizers.py to materialize them under OPENPROXY_TOKENIZER_DIR (default /root/.openproxy/tokenizers).",
+  "artifacts": [
+    {
+      "id": "qwen3-coder-next",
+      "family": "qwen",
+      "kind": "hf_tokenizer_json",
+      "filename": "qwen3-coder-next-a7fbcb5.tokenizer.json",
+      "legacy_filenames": ["qwen.json"],
+      "legacy_note": "qwen.json was verified equivalent to Qwen3-32B/Coder-Next vocab+merges after normalizing serialization; preferred only as a compatibility fallback.",
+      "url": "https://huggingface.co/Qwen/Qwen3-Coder-Next/resolve/a7fbcb5c0e12d62a448eaa0e260346bf5dcc0feb/tokenizer.json",
+      "revision": "a7fbcb5c0e12d62a448eaa0e260346bf5dcc0feb",
+      "sha256": "19564a48c4f71a2a1b937cce34c737a1e662b171c5f5d7edf641a15cd896f07d",
+      "bytes": 7032399
+    },
+    {
+      "id": "deepseek-v3.2",
+      "family": "deepseek",
+      "kind": "hf_tokenizer_json",
+      "filename": "deepseek-v3.2-a7e62ac.tokenizer.json",
+      "legacy_filenames": [],
+      "url": "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/a7e62ac04ecb2c0a54d736dc46601c5606cf10a6/tokenizer.json",
+      "revision": "a7e62ac04ecb2c0a54d736dc46601c5606cf10a6",
+      "sha256": "cd050be35cae877f8f0aa847f45aa87e23835a56ca32b29b28545597852784e5",
+      "bytes": 7847502
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "family": "kimi",
+      "kind": "tiktoken_ranks",
+      "filename": "kimi-k2.7-code-74797c9.tiktoken.model",
+      "legacy_filenames": ["kimi.model"],
+      "legacy_note": "kimi.model was verified to share the K2.7-Code vocabulary and split pattern.",
+      "url": "https://huggingface.co/moonshotai/Kimi-K2.7-Code/resolve/74797c9c62378b951a1f6fcf5c4631024e9b8bef/tiktoken.model",
+      "revision": "74797c9c62378b951a1f6fcf5c4631024e9b8bef",
+      "sha256": "b6c497a7469b33ced9c38afb1ad6e47f03f5e5dc05f15930799210ec050c5103",
+      "bytes": 2795286
+    },
+    {
+      "id": "glm-5.3",
+      "family": "glm",
+      "kind": "hf_tokenizer_json",
+      "filename": "glm-5.3-ba32f8c.tokenizer.json",
+      "legacy_filenames": [],
+      "url": "https://huggingface.co/zai-org/GLM-5.3/resolve/ba32f8c19c8738e2c57c71798c601d477a7bf844/tokenizer.json",
+      "revision": "ba32f8c19c8738e2c57c71798c601d477a7bf844",
+      "sha256": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d",
+      "bytes": 20217442
+    },
+    {
+      "id": "minimax-m3",
+      "family": "minimax",
+      "kind": "hf_tokenizer_json",
+      "filename": "minimax-m3-8f11016.tokenizer.json",
+      "legacy_filenames": [],
+      "url": "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/8f11016727d9e05be3ca12d45ce8ad88ccb2bafe/tokenizer.json",
+      "revision": "8f11016727d9e05be3ca12d45ce8ad88ccb2bafe",
+      "sha256": "bb1f1626cf01448f1e3b6036d0a061ffc66c91d9046aada14ea23a5441b5ad6e",
+      "bytes": 9731500
+    }
+  ],
+  "templates": [
+    {
+      "id": "qwen3-coder-next-chat-template",
+      "filename": "qwen3-coder-next-a7fbcb5.chat_template.jinja",
+      "embedded": true,
+      "url": "https://huggingface.co/Qwen/Qwen3-Coder-Next/resolve/a7fbcb5c0e12d62a448eaa0e260346bf5dcc0feb/chat_template.jinja",
+      "revision": "a7fbcb5c0e12d62a448eaa0e260346bf5dcc0feb",
+      "sha256": "c79a833039a43602150cce0902403d6e376c50930c1b2a139b2964e1f0c322a0",
+      "bytes": 6068
+    }
+  ],
+  "legacy_heuristics": [
+    {
+      "id": "claude-npm-legacy",
+      "family": "claude",
+      "kind": "anthropic_npm_claude_json",
+      "filename": "claude.json",
+      "url": "https://www.npmjs.com/package/@anthropic-ai/tokenizer",
+      "note": "Anthropic's legacy npm tokenizer. Reproducing its output does not prove fidelity to modern Claude models; it is only a clearly-labelled heuristic, and the authoritative count remains the upstream usage block or POST /v1/messages/count_tokens."
+    }
+  ]
+}

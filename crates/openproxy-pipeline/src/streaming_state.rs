@@ -24,7 +24,16 @@ use std::time::Instant;
 
 pub(crate) struct StreamingState {
     pub sse_parser: SseParser,
+    /// Raw upstream usage, exactly as observed (including explicit zeros).
+    /// This is what the usage tracker persists.
     pub usage: Option<OpenAIUsage>,
+    /// Per-field presence of [`Self::usage`], carried from the parser that
+    /// observed each field. Never reconstructed from a reserialized body.
+    pub usage_presence: openproxy_types::UsagePresence,
+    /// Client-facing view of [`Self::usage`] after the injected-system-prefix
+    /// discount. Kept separate so a client-only adjustment never contaminates
+    /// the observed/billable record.
+    pub client_usage: Option<OpenAIUsage>,
     pub upstream_message_id: Option<String>,
     pub ttft_ms: Option<u64>,
     pub stop_reason: Option<String>,
@@ -88,6 +97,8 @@ impl StreamingState {
         Self {
             sse_parser: SseParser::new(crate::sse::MAX_SSE_LINE_BYTES),
             usage: None,
+            usage_presence: openproxy_types::UsagePresence::none(),
+            client_usage: None,
             upstream_message_id: None,
             ttft_ms: None,
             stop_reason: None,

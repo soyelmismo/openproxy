@@ -221,11 +221,28 @@ impl<'a> UsageRecordBuilder<'a> {
 
     fn compute_prompt_tokens(&self) -> (Option<u32>, bool) {
         match self.prompt_tokens {
-            Some(t) if t > 0 => (Some(t), self.usage_estimated.0),
-            _ => {
-                let est = openproxy_compression::token_estimate::estimate_request_prompt_tokens(
-                    &self.req.openai_request,
-                );
+            // `Some(0)` is an explicit upstream observation, not absence.
+            Some(t) => (Some(t), self.usage_estimated.0),
+            None => {
+                // Prefer the resolved upstream model id over the client name
+                // (combo names) for tokenizer selection.
+                let model = self
+                    .model
+                    .map(|m| m.model_id.as_str())
+                    .or(Some(self.req.openai_request.model.as_str()));
+                // Only the identity OpenAI chat rail receives the body we
+                // render; no dispatcher rail proves that today (the OpenAI
+                // formatter normalizes messages/tools and the adapter may
+                // rewrite them), so the pinned Qwen template stays an offline
+                // reference and production rails keep the estimated
+                // heuristic.
+                let rail = openproxy_compression::token_estimate::PromptRail::Translated;
+                let est =
+                    openproxy_compression::token_estimate::estimate_request_prompt_tokens_for_rail(
+                        &self.req.openai_request,
+                        model,
+                        rail,
+                    );
                 if est > 0 {
                     tracing::debug!(
                         request_id = %self.req.request_id,
@@ -242,14 +259,19 @@ impl<'a> UsageRecordBuilder<'a> {
 
     pub(crate) fn compute_completion_tokens(&self) -> (Option<u32>, bool) {
         match self.completion_tokens {
-            Some(t) if t > 0 => (Some(t), self.usage_estimated.1),
-            _ => {
+            // `Some(0)` is an explicit upstream observation, not absence.
+            Some(t) => (Some(t), self.usage_estimated.1),
+            None => {
                 let Some(ref body) = self.response_body_json else {
                     return (None, false);
                 };
+                let model = self
+                    .model
+                    .map(|m| m.model_id.as_str())
+                    .or(Some(self.req.openai_request.model.as_str()));
                 let est =
                     openproxy_compression::token_estimate::estimate_completion_tokens_from_body(
-                        body,
+                        body, model,
                     );
                 if est > 0 {
                     tracing::debug!(

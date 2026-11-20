@@ -157,18 +157,23 @@ impl UpstreamDispatcher {
         dctx: &DispatchContext<'_>,
         args: NonStreamingSuccessArgs,
     ) -> PipelineResult {
-        let prompt_tokens = args.openai_response.usage.as_ref().map(|u| u.prompt_tokens);
-        let completion_tokens = args
-            .openai_response
-            .usage
-            .as_ref()
-            .map(|u| u.completion_tokens);
-        let cached_tokens = args
-            .openai_response
-            .usage
-            .as_ref()
-            .and_then(|u| u.prompt_tokens_details.as_ref())
-            .and_then(|d| d.cached_tokens);
+        // Persist the observed upstream snapshot when present; explicit zeros
+        // stay zeros. Only fields absent upstream use the filled estimate from
+        // the pre-discount snapshot (`recorded_usage`), never the client wire
+        // value adjusted for the injected system prefix.
+        let observed = args.usage_fill.observed;
+        let recorded = args.recorded_usage.as_ref();
+        let prompt_tokens = observed
+            .and_then(|o| o.prompt)
+            .or_else(|| recorded.map(|u| u.prompt_tokens));
+        let completion_tokens = observed
+            .and_then(|o| o.completion)
+            .or_else(|| recorded.map(|u| u.completion_tokens));
+        let cached_tokens = observed.and_then(|o| o.cached).or_else(|| {
+            recorded
+                .and_then(|u| u.prompt_tokens_details.as_ref())
+                .and_then(|d| d.cached_tokens)
+        });
 
         let total_ms_now = params.started.elapsed().as_millis() as u64;
 
@@ -225,7 +230,7 @@ impl UpstreamDispatcher {
         .is_streaming(false)
         .stream_complete(true)
         .client_response(true)
-        .usage_estimated(args.usage_estimated)
+        .usage_estimated(args.usage_fill.estimated)
         .stop_reason(None)
         .record()
         .await

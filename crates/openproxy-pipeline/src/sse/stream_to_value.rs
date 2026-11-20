@@ -15,16 +15,22 @@ fn feed_chunk_to_acc(
     mut chunk: crate::sse::UpstreamSseChunk,
 ) -> bool {
     if chunk.is_liveness() {
+        // A usage-only frame (Gemini reports `usageMetadata` on metadata-only
+        // frames) is not forwarded, but its counters must still reach the fold.
+        if let Some(u) = chunk.usage.take() {
+            acc.set_usage_with_presence(u, chunk.usage_presence);
+        }
         return false;
     }
     let done = chunk.done;
     let usage = chunk.usage.take();
+    let usage_presence = chunk.usage_presence;
     let stop_reason = chunk.stop_reason.take();
     let delta_reasoning = chunk.delta_reasoning.take();
     let json_str = chunk.into_json_string();
 
     if let Some(u) = usage {
-        acc.set_usage(u);
+        acc.set_usage_with_presence(u, usage_presence);
     }
     if let Some(sr) = stop_reason {
         acc.set_stop_reason(&sr);
@@ -42,6 +48,21 @@ pub fn parse_sse_stream_to_openai_response(
     body_str: &str,
     model_name: &str,
 ) -> Result<OpenAIResponse> {
+    parse_sse_stream_to_openai_response_with_presence(target_format, body_str, model_name)
+        .map(|(response, _)| response)
+}
+
+/// Parse an SSE stream buffer into a unary `OpenAIResponse` together with the
+/// per-field presence observed by the parsers while folding the frames.
+///
+/// Presence travels with the chunk and is merged by the accumulator; it is
+/// never re-derived from the serialized response, which would mark every
+/// zero-filled field as an upstream observation.
+pub fn parse_sse_stream_to_openai_response_with_presence(
+    target_format: TargetFormat,
+    body_str: &str,
+    model_name: &str,
+) -> Result<(OpenAIResponse, openproxy_types::UsagePresence)> {
     let mut acc = ResponseAccumulator::new();
     let chunk_id = "chatcmpl_unary";
     let created = std::time::SystemTime::now()
@@ -83,7 +104,7 @@ pub fn parse_sse_stream_to_openai_response(
                 acc.set_stop_reason(&r);
             }
             if let Some(u) = state.last_finish_step_usage.take() {
-                acc.set_usage(u);
+                acc.set_usage_with_presence(u, state.last_finish_step_usage_presence);
             }
             if !saw_any_chunk && acc.content_text().is_empty() {
                 // If stream was completely empty of chunks, leave stop_reason None
@@ -182,7 +203,9 @@ pub fn parse_sse_stream_to_openai_response(
     }
 
     let val = acc.finish(chunk_id, created, model_name);
-    serde_json::from_value(val).ctx_parse("failed to parse accumulated sse into OpenAIResponse")
+    let response = serde_json::from_value(val)
+        .ctx_parse("failed to parse accumulated sse into OpenAIResponse")?;
+    Ok((response, acc.usage_presence()))
 }
 
 #[cfg(test)]
@@ -273,5 +296,123 @@ mod tests {
         let usage = resp.usage.unwrap();
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.completion_tokens, 4);
+    }
+
+    #[test]
+    fn test_openai_fold_presence_keeps_partial_usage_and_reports_only_what_arrived() {
+        // The final OpenAI frame reports prompt+total but no completion. The
+        // fold must keep the counters in the value while the presence says the
+        // completion is absent, so the caller estimates it instead of billing
+        // a zero as an observation.
+        let stream_text = "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.4\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":17,\"total_tokens\":17}}\n\ndata: [DONE]\n\n";
+        let (resp, presence) = parse_sse_stream_to_openai_response_with_presence(
+            TargetFormat::Openai,
+            stream_text,
+            "gpt-5.4",
+        )
+        .unwrap();
+        let usage = resp.usage.expect("folded usage");
+        assert_eq!(usage.prompt_tokens, 17);
+        assert_eq!(usage.total_tokens, 17);
+        assert_eq!(
+            presence,
+            openproxy_types::UsagePresence {
+                prompt: true,
+                completion: false,
+                total: true,
+                cached: false,
+            },
+            "the absent completion must not be reported as an observation"
+        );
+
+        // The legacy wrapper keeps working and yields the same response.
+        let legacy =
+            parse_sse_stream_to_openai_response(TargetFormat::Openai, stream_text, "gpt-5.4")
+                .unwrap();
+        assert_eq!(
+            legacy.usage.expect("legacy usage").prompt_tokens,
+            17,
+            "the public wrapper must keep its signature and behaviour"
+        );
+    }
+
+    #[test]
+    fn test_openai_fold_presence_reports_none_without_a_usage_block() {
+        let stream_text = "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let (resp, presence) = parse_sse_stream_to_openai_response_with_presence(
+            TargetFormat::Openai,
+            stream_text,
+            "m",
+        )
+        .unwrap();
+        assert!(resp.usage.is_none());
+        assert_eq!(presence, openproxy_types::UsagePresence::none());
+    }
+
+    /// Fold a first frame that reports `prompt_tokens: 17` and no total with a
+    /// second frame whose usage block is exactly `final_usage`.
+    fn fold_two_frames_with_final_usage(
+        final_usage: &str,
+    ) -> (OpenAIResponse, openproxy_types::UsagePresence) {
+        let stream_text = format!(
+            "data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.4\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"hi\"}},\"finish_reason\":null}}],\"usage\":{{\"prompt_tokens\":17}}}}\n\n\
+             data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.4\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}],\"usage\":{final_usage}}}\n\n\
+             data: [DONE]\n\n"
+        );
+        parse_sse_stream_to_openai_response_with_presence(
+            TargetFormat::Openai,
+            &stream_text,
+            "gpt-5.4",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_openai_fold_total_absent_keeps_presence_false() {
+        // The parent probe: first frame prompt 17, second frame completion 0
+        // with no total. The merge must not mark a total as measured; the
+        // materialized body may derive it from the observed components.
+        let (resp, presence) = fold_two_frames_with_final_usage("{\"completion_tokens\":0}");
+        let usage = resp.usage.expect("folded usage");
+        assert_eq!(usage.prompt_tokens, 17);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(
+            usage.total_tokens, 17,
+            "the materialized body derives the total from observed components"
+        );
+        assert!(
+            !presence.total,
+            "a total that never arrived must not be marked as measured"
+        );
+        assert!(presence.prompt && presence.completion);
+    }
+
+    #[test]
+    fn test_openai_fold_explicit_zero_total_is_kept() {
+        // The parent probe: the second frame explicitly reports total 0. It
+        // must survive as an observed zero, not be replaced by prompt+completion.
+        let (resp, presence) =
+            fold_two_frames_with_final_usage("{\"completion_tokens\":0,\"total_tokens\":0}");
+        let usage = resp.usage.expect("folded usage");
+        assert_eq!(usage.prompt_tokens, 17);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(
+            usage.total_tokens, 0,
+            "an explicit zero total is an observation and must not be rewritten"
+        );
+        assert!(
+            presence.total,
+            "the explicit zero came from the upstream, so presence is true"
+        );
+    }
+
+    #[test]
+    fn test_openai_fold_positive_total_is_kept() {
+        let (resp, presence) =
+            fold_two_frames_with_final_usage("{\"completion_tokens\":0,\"total_tokens\":17}");
+        let usage = resp.usage.expect("folded usage");
+        assert_eq!(usage.prompt_tokens, 17);
+        assert_eq!(usage.total_tokens, 17);
+        assert!(presence.total);
     }
 }

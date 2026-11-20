@@ -126,7 +126,8 @@ async fn cancelled_usage_records_bpe_and_tools_without_calling_them_reported() {
         "messages": [{"role":"user", "content":"Hello world"}],
         "tools": [{"type":"function", "function":{"name":"lookup", "description":"find the invoice ".repeat(100)}}]
     })).unwrap();
-    let expected = openproxy_compression::token_estimate::estimate_request_prompt_tokens(request);
+    let expected =
+        openproxy_compression::token_estimate::estimate_request_prompt_tokens(request, None);
     assert!(expected > 100);
     let err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
     builder.err(&err).status_code(499).record().await.unwrap();
@@ -168,6 +169,31 @@ async fn cancelled_usage_keeps_upstream_count_instead_of_bpe_estimate() {
 }
 
 #[tokio::test]
+async fn explicit_zero_prompt_and_completion_are_observed_not_estimated() {
+    let mut tracker = make_test_tracker();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    let builder = make_test_builder(&tracker, &combo, &target);
+    builder
+        .status_code(200)
+        .prompt_tokens_opt(Some(0))
+        .completion_tokens_opt(Some(0))
+        .record()
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_ok());
+    let jobs = pending_jobs(&tracker).await;
+    let crate::worker::BackgroundJob::RecordAttempt { usage_input, .. } = &jobs[0] else {
+        panic!("missing usage");
+    };
+    assert_eq!(usage_input.prompt_tokens, Some(0));
+    assert_eq!(usage_input.completion_tokens, Some(0));
+    assert!(!usage_input.has_flag(openproxy_types::usage::USAGE_FLAG_PROMPT_ESTIMATED));
+    assert!(!usage_input.has_flag(openproxy_types::usage::USAGE_FLAG_COMPLETION_ESTIMATED));
+}
+
+#[tokio::test]
 async fn unary_bpe_fallback_keeps_estimation_flags_in_usage_log() {
     let mut tracker = make_test_tracker();
     let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
@@ -178,16 +204,19 @@ async fn unary_bpe_fallback_keeps_estimation_flags_in_usage_log() {
         "id":"test", "object":"chat.completion", "created":0, "model":"test",
         "choices":[{"index":0,"message":{"role":"assistant","content":"Hello world"},"finish_reason":"stop"}]
     })).unwrap();
-    let estimated = crate::dispatcher::unary::ensure_usage_populated(
+    let fill = crate::dispatcher::unary::ensure_usage_populated(
         &mut response,
         &builder.req.openai_request,
+        None,
+        crate::dispatcher::translation::UsagePresence::none(),
+        openproxy_compression::token_estimate::PromptRail::Translated,
     );
     let usage = response.usage.unwrap();
     builder
         .status_code(200)
         .prompt_tokens_opt(Some(usage.prompt_tokens))
         .completion_tokens_opt(Some(usage.completion_tokens))
-        .usage_estimated(estimated)
+        .usage_estimated(fill.estimated)
         .record()
         .await
         .unwrap();
@@ -243,7 +272,7 @@ fn compute_completion_tokens_fallback_for_tool_calls() {
 }
 
 #[test]
-fn compute_completion_tokens_zero_falls_back_to_tool_calls() {
+fn compute_completion_tokens_explicit_zero_is_observed_not_absent() {
     let tracker = make_test_tracker();
     let (combo, target) = make_test_combo_and_target();
 
@@ -268,9 +297,9 @@ fn compute_completion_tokens_zero_falls_back_to_tool_calls() {
         }]
     }));
 
-    let (tokens, estimated) = builder.compute_completion_tokens();
-    assert!(estimated);
-    assert!(tokens.is_some_and(|t| t >= 6));
+    // An explicit upstream zero is a valid observation: it must not be
+    // silently replaced by a heuristic estimate in the persisted record.
+    assert_eq!(builder.compute_completion_tokens(), (Some(0), false));
 }
 
 #[tokio::test]

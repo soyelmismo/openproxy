@@ -165,40 +165,51 @@ impl ChunkProcessor<'_> {
         ctx: &StreamContext<'_>,
         state: &mut StreamingState,
         usage: Option<crate::translation::OpenAIUsage>,
+        usage_presence: openproxy_types::UsagePresence,
         stop_reason: Option<String>,
         overwrite_stop_reason: bool,
     ) {
         if let Some(new_usage) = usage {
-            let mut merged = match state.usage.take() {
-                Some(existing) => crate::sse::merge_usage(existing, new_usage),
-                None => new_usage,
+            let (merged, merged_presence) = match state.usage.take() {
+                Some(existing) => crate::sse::merge_usage_with_presence(
+                    existing,
+                    state.usage_presence,
+                    new_usage,
+                    usage_presence,
+                ),
+                None => (new_usage, state.usage_presence.merge(usage_presence)),
             };
+            state.usage_presence = merged_presence;
+
+            // `state.usage` stays the raw upstream observation for the usage
+            // tracker. The prefix discount is a client-wire adjustment only;
+            // applying it to the recorded value would understate real cost.
+            state.usage = Some(merged.clone());
+            let mut client_usage = merged;
 
             // Discount prefix tokens if a system prefix was dynamically injected
             if let Some(ref prefix) = *ctx.req.active_system_prefix.lock() {
-                let prefix_msg = [openproxy_types::OpenAIMessage {
-                    role: "system".to_string(),
-                    content: Some(serde_json::Value::String(prefix.clone())),
-                    name: None,
-                    tool_call_id: None,
-                    tool_calls: None,
-                    extra: Default::default(),
-                }];
+                // Same tokenizer as the unary path: the resolved target model
+                // id, never the client-facing combo alias.
+                let model = Some(ctx.model.model_id.as_str());
                 let prefix_tokens =
-                    openproxy_compression::token_estimate::estimate_prompt_tokens(&prefix_msg);
-                let client_est = openproxy_compression::token_estimate::estimate_prompt_tokens(
-                    &ctx.req.openai_request.messages,
-                )
-                .max(1);
+                    crate::dispatcher::translation::injected_prefix_tokens(prefix, model);
 
-                merged.prompt_tokens = merged
-                    .prompt_tokens
-                    .saturating_sub(prefix_tokens)
-                    .max(client_est);
-                merged.total_tokens = merged.prompt_tokens + merged.completion_tokens;
+                // Client-only discount. Do not clamp upward with a heuristic:
+                // the raw `state.usage` remains the recorded observation.
+                crate::dispatcher::translation::discount_client_prefix(
+                    &mut client_usage,
+                    prefix_tokens,
+                );
             }
+            // A total the upstream never reported is materialized on the
+            // client copy only; presence stays `false` for the record.
+            crate::dispatcher::translation::materialize_wire_total(
+                &mut client_usage,
+                state.usage_presence,
+            );
 
-            state.usage = Some(merged);
+            state.client_usage = Some(client_usage);
         }
         if (overwrite_stop_reason && stop_reason.is_some())
             || (stop_reason.is_some() && state.stop_reason.is_none())
@@ -207,7 +218,7 @@ impl ChunkProcessor<'_> {
         }
         if let Some(a) = state.acc.as_mut() {
             if let Some(u) = &state.usage {
-                a.set_usage(u.to_owned());
+                a.set_usage_with_presence(u.to_owned(), state.usage_presence);
             }
             if let Some(sr) = &state.stop_reason {
                 a.set_stop_reason(sr);

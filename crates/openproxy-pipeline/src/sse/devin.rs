@@ -102,6 +102,24 @@ fn devin_usage_to_openai(u: &wire::DevinUsage) -> OpenAIUsage {
     }
 }
 
+fn devin_frame_usage_presence(frame: &wire::DevinFrame) -> openproxy_types::UsagePresence {
+    // Devin frames are protobuf, not JSON: the decoder gives concrete i64
+    // fields, so the wire cannot distinguish an omitted field from a zero.
+    // Presence is therefore object-level (a usage frame arrived) and `total`
+    // is never claimed because `devin_usage_to_openai` synthesizes it.
+    if frame.usage.is_some() || frame.dim_found {
+        openproxy_types::UsagePresence {
+            prompt: true,
+            completion: true,
+            total: false,
+            cached: frame.usage.as_ref().is_some_and(|u| u.cached_tokens != 0)
+                || (frame.dim_found && frame.dim_cached != 0),
+        }
+    } else {
+        openproxy_types::UsagePresence::none()
+    }
+}
+
 fn devin_frame_usage(frame: &wire::DevinFrame) -> Option<OpenAIUsage> {
     if let Some(u) = &frame.usage {
         return Some(devin_usage_to_openai(u));
@@ -137,6 +155,7 @@ pub(crate) fn devin_frame_to_chunk(
     }
 
     let usage = devin_frame_usage(frame);
+    let usage_presence = devin_frame_usage_presence(frame);
     let mut delta = serde_json::Map::new();
     let mut has_content = false;
 
@@ -208,6 +227,7 @@ pub(crate) fn devin_frame_to_chunk(
         payload,
         done: false,
         usage,
+        usage_presence,
         stop_reason: None,
         delta_reasoning: (!frame.thinking_text.is_empty()).then(|| frame.thinking_text.clone()),
         delta_tool_calls,
@@ -241,6 +261,7 @@ pub(crate) fn devin_done_chunk(
         payload,
         done: true,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: Some(finish_reason.to_string()),
         delta_reasoning: None,
         delta_tool_calls: Vec::new(),

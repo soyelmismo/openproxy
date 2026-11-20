@@ -18,7 +18,7 @@ mod stream_to_value;
 
 // Re-exported so the streaming state reaches it without importing the rest of
 // the Anthropic submodule.
-pub(crate) use anthropic::merge_usage;
+pub(crate) use anthropic::{merge_usage, merge_usage_with_presence};
 
 use crate::translation::OpenAIUsage;
 use openproxy_types::ResultExt;
@@ -116,6 +116,7 @@ pub(crate) fn make_text_delta(
         payload,
         done: false,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: None,
         delta_reasoning: if is_reasoning {
             Some(text.to_string())
@@ -161,6 +162,7 @@ pub(crate) fn make_tool_call_start(
         payload,
         done: false,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: vec![tool_call],
@@ -197,6 +199,7 @@ pub(crate) fn make_tool_call_delta(
         payload,
         done: false,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: vec![tool_call],
@@ -274,7 +277,9 @@ pub use commandcode::{CommandCodeSseState, parse_commandcode_sse_line};
 pub use gemini::{parse_gemini_sse_line, parse_gemini_sse_line_test};
 pub use openai::parse_openai_sse_line;
 pub use responses::{ResponsesSseState, parse_responses_sse_stream_line};
-pub use stream_to_value::parse_sse_stream_to_openai_response;
+pub use stream_to_value::{
+    parse_sse_stream_to_openai_response, parse_sse_stream_to_openai_response_with_presence,
+};
 
 #[cfg(test)]
 mod tests {

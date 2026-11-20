@@ -78,6 +78,7 @@ impl ChunkProcessor<'_> {
             ctx,
             self.state,
             chunk.usage.take(),
+            chunk.usage_presence,
             chunk.stop_reason.take(),
             false,
         );

@@ -391,3 +391,64 @@ fn anthropic_translate_unknown_event_skipped() {
     let result = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap();
     assert!(result.is_none());
 }
+
+#[test]
+fn merge_usage_with_presence_keeps_only_observed_totals() {
+    use openproxy_types::UsagePresence;
+
+    let no_total = UsagePresence {
+        prompt: true,
+        completion: false,
+        total: false,
+        cached: false,
+    };
+    let zero_total = UsagePresence {
+        prompt: true,
+        completion: true,
+        total: true,
+        cached: false,
+    };
+
+    let first = OpenAIUsage {
+        prompt_tokens: 17,
+        completion_tokens: 0,
+        total_tokens: 0,
+        prompt_tokens_details: None,
+    };
+    let second = OpenAIUsage {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+        prompt_tokens_details: None,
+    };
+
+    // Total absent in both snapshots: stays unmeasured, not synthesized.
+    let (merged, presence) =
+        merge_usage_with_presence(first.clone(), no_total, second.clone(), no_total);
+    assert_eq!(merged.total_tokens, 0);
+    assert!(!presence.total);
+
+    // An explicit zero is a real observation and wins over absence.
+    let (merged, presence) = merge_usage_with_presence(first.clone(), no_total, second, zero_total);
+    assert_eq!(merged.total_tokens, 0);
+    assert!(presence.total);
+    assert_eq!(merged.prompt_tokens, 17);
+
+    // Between two real observations the maximum wins, and a later absent
+    // total never erases it.
+    let higher = OpenAIUsage {
+        total_tokens: 40,
+        ..first.clone()
+    };
+    let lower = OpenAIUsage {
+        total_tokens: 12,
+        ..first.clone()
+    };
+    let all_total = UsagePresence::all();
+    let (merged, presence) = merge_usage_with_presence(higher, all_total, lower, all_total);
+    assert_eq!(merged.total_tokens, 40);
+    assert!(presence.total);
+    let (merged, presence) = merge_usage_with_presence(merged, presence, first, no_total);
+    assert_eq!(merged.total_tokens, 40);
+    assert!(presence.total);
+}

@@ -112,6 +112,7 @@ pub(crate) fn kiro_done_chunk(
         payload,
         done: true,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: Some(finish_reason.to_string()),
         delta_reasoning: None,
         delta_tool_calls: Vec::new(),

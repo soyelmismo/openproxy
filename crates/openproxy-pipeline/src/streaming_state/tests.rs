@@ -745,6 +745,9 @@ mod reasoning_instrumentation_tests {
             total_tokens: 165,
             prompt_tokens_details: None,
         });
+        // The terminal chunk forwards the client-facing view; without an
+        // injected prefix it is identical to the observed usage.
+        state.client_usage = state.usage.clone();
 
         let mut processor = ChunkProcessor {
             state: &mut state,
@@ -766,6 +769,7 @@ mod reasoning_instrumentation_tests {
             }),
             done: true,
             usage: None,
+            usage_presence: openproxy_types::UsagePresence::none(),
             stop_reason: Some("stop".to_string()),
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
@@ -787,4 +791,179 @@ mod reasoning_instrumentation_tests {
         let frame2 = rx.recv().await.expect("must receive [DONE] sentinel");
         assert_eq!(frame2.as_ref(), crate::SSE_DONE_BYTES.as_ref());
     }
+}
+
+#[test]
+fn prefix_discount_is_client_only_and_keeps_raw_usage_for_recording() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(64);
+    let sink = crate::race_sink::StreamSink::direct(tx);
+    let (_pipeline, combo, target, model, req, timeouts) = setup_test_harness(&sink);
+    *req.active_system_prefix.lock() = Some("SYSTEM PREFIX ".repeat(64));
+    let started = std::time::Instant::now();
+    let ctx = crate::streaming_state::StreamContext {
+        req: &req,
+        combo: &combo,
+        target: &target,
+        model: &model,
+        target_format: openproxy_types::TargetFormat::Anthropic,
+        sink: &sink,
+        trace_id: "trace-prefix",
+        chunk_id: "chunk-prefix",
+        model_name: "claude-test",
+        started,
+        attempt: 1,
+        race_size: 1,
+        created: 1000,
+        connect_and_send_ms: 5,
+        resolved_timeouts: &timeouts,
+        proxy_url: None,
+        proxy_status: None,
+    };
+    let mut state = super::StreamingState::new(false);
+    super::processor::ChunkProcessor::sync_chunk_metadata_to_accumulator(
+        &ctx,
+        &mut state,
+        Some(openproxy_types::message::OpenAIUsage {
+            prompt_tokens: 5_000,
+            completion_tokens: 30,
+            total_tokens: 5_030,
+            prompt_tokens_details: None,
+        }),
+        openproxy_types::UsagePresence::both(),
+        None,
+        false,
+    );
+
+    let raw = state.usage.expect("raw upstream usage");
+    let client = state.client_usage.expect("client-facing usage");
+    assert_eq!(
+        raw.prompt_tokens, 5_000,
+        "the recorded value must stay the raw upstream observation"
+    );
+    assert_eq!(raw.total_tokens, 5_030);
+    assert!(
+        client.prompt_tokens < raw.prompt_tokens,
+        "the client view must discount the injected prefix"
+    );
+    assert_eq!(
+        client.total_tokens,
+        client.prompt_tokens + client.completion_tokens
+    );
+}
+
+#[test]
+fn stream_presence_merges_across_frames_and_keeps_raw_usage() {
+    // Two frames from the probe: the first reports prompt+total only, the
+    // second adds an explicit `completion_tokens: 0`. Presence must merge per
+    // field and the raw recorded usage must never be rewritten by the
+    // client-only prefix discount.
+    let (tx, _rx) = tokio::sync::mpsc::channel(64);
+    let sink = crate::race_sink::StreamSink::direct(tx);
+    let (_pipeline, combo, target, model, req, timeouts) = setup_test_harness(&sink);
+    *req.active_system_prefix.lock() = Some("SYSTEM PREFIX ".repeat(64));
+    let started = std::time::Instant::now();
+    let ctx = crate::streaming_state::StreamContext {
+        req: &req,
+        combo: &combo,
+        target: &target,
+        model: &model,
+        target_format: openproxy_types::TargetFormat::Openai,
+        sink: &sink,
+        trace_id: "trace-presence",
+        chunk_id: "chunk-presence",
+        model_name: "m",
+        started,
+        attempt: 1,
+        race_size: 1,
+        created: 1000,
+        connect_and_send_ms: 5,
+        resolved_timeouts: &timeouts,
+        proxy_url: None,
+        proxy_status: None,
+    };
+    let mut state = super::StreamingState::new(false);
+    let partial = openproxy_types::UsagePresence {
+        prompt: true,
+        completion: false,
+        total: true,
+        cached: false,
+    };
+    super::processor::ChunkProcessor::sync_chunk_metadata_to_accumulator(
+        &ctx,
+        &mut state,
+        Some(openproxy_types::message::OpenAIUsage {
+            prompt_tokens: 17,
+            completion_tokens: 0,
+            total_tokens: 17,
+            prompt_tokens_details: None,
+        }),
+        partial,
+        None,
+        false,
+    );
+    assert_eq!(state.usage_presence, partial);
+    let first_client = state
+        .client_usage
+        .as_ref()
+        .expect("client usage after first frame");
+    assert_eq!(first_client.prompt_tokens, 0, "prefix discount applies");
+    assert_eq!(
+        state.usage.as_ref().expect("raw usage").prompt_tokens,
+        17,
+        "the recorded observation keeps the upstream prompt"
+    );
+
+    let complete = openproxy_types::UsagePresence {
+        prompt: true,
+        completion: true,
+        total: true,
+        cached: false,
+    };
+    super::processor::ChunkProcessor::sync_chunk_metadata_to_accumulator(
+        &ctx,
+        &mut state,
+        Some(openproxy_types::message::OpenAIUsage {
+            prompt_tokens: 17,
+            completion_tokens: 0,
+            total_tokens: 17,
+            prompt_tokens_details: None,
+        }),
+        complete,
+        None,
+        false,
+    );
+    assert_eq!(
+        state.usage_presence, complete,
+        "the explicit zero adds the completion flag without clearing the others"
+    );
+    let raw = state.usage.expect("raw usage");
+    assert_eq!(raw.prompt_tokens, 17);
+    assert_eq!(raw.completion_tokens, 0);
+    assert_eq!(raw.total_tokens, 17);
+}
+
+#[test]
+fn prefix_discount_never_raises_prompt_above_the_upstream_value() {
+    // A heuristic prefix count larger than the observed prompt must clamp the
+    // client view down to zero, never raise it back to the prefix estimate.
+    let mut usage = openproxy_types::message::OpenAIUsage {
+        prompt_tokens: 5,
+        completion_tokens: 30,
+        total_tokens: 35,
+        prompt_tokens_details: None,
+    };
+    crate::dispatcher::translation::discount_client_prefix(&mut usage, 4_096);
+    assert_eq!(usage.prompt_tokens, 0);
+    assert_eq!(usage.completion_tokens, 30);
+    assert_eq!(usage.total_tokens, 30);
+
+    let mut exact = openproxy_types::message::OpenAIUsage {
+        prompt_tokens: 40,
+        completion_tokens: 2,
+        total_tokens: 42,
+        prompt_tokens_details: None,
+    };
+    crate::dispatcher::translation::discount_client_prefix(&mut exact, 10);
+    assert_eq!(exact.prompt_tokens, 30);
+    assert_eq!(exact.total_tokens, 32);
 }

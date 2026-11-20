@@ -14,6 +14,9 @@ pub struct UpstreamSseChunk {
     pub done: bool,
     /// Usage stats if present in this chunk, usually only the final one.
     pub usage: Option<OpenAIUsage>,
+    /// Per-field presence of `usage`, parsed next to the upstream payload.
+    /// Distinguishes an explicit zero from a field the upstream omitted.
+    pub usage_presence: openproxy_types::UsagePresence,
     /// Upstream stop reason (e.g. "end_turn", "max_tokens", "stop_sequence"
     /// for Anthropic; mapped finish_reason for OpenAI). Only set on the
     /// final chunk.
@@ -52,6 +55,7 @@ impl UpstreamSseChunk {
             payload,
             done: false,
             usage: None,
+            usage_presence: openproxy_types::UsagePresence::none(),
             stop_reason: None,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
@@ -66,6 +70,7 @@ impl UpstreamSseChunk {
             payload: Value::Null,
             done: true,
             usage: None,
+            usage_presence: openproxy_types::UsagePresence::none(),
             stop_reason: None,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
@@ -81,6 +86,7 @@ impl UpstreamSseChunk {
             payload: Value::Null,
             done: false,
             usage: None,
+            usage_presence: openproxy_types::UsagePresence::none(),
             stop_reason: None,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),

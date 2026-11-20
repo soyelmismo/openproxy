@@ -126,6 +126,66 @@ fn usage_and_stop_reason_populated() {
     assert_eq!(v["choices"][0]["finish_reason"], "stop");
 }
 
+/// The accumulator must carry per-field presence so the final fold can tell
+/// an explicit upstream zero from a field that never arrived.
+#[test]
+fn set_usage_with_presence_merges_per_field_flags() {
+    use openproxy_types::UsagePresence;
+
+    let mut acc = ResponseAccumulator::new();
+    assert_eq!(acc.usage_presence(), UsagePresence::none());
+
+    acc.set_usage_with_presence(
+        OpenAIUsage {
+            prompt_tokens: 17,
+            completion_tokens: 0,
+            total_tokens: 17,
+            prompt_tokens_details: None,
+        },
+        UsagePresence {
+            prompt: true,
+            completion: false,
+            total: true,
+            cached: false,
+        },
+    );
+    assert_eq!(
+        acc.usage_presence(),
+        UsagePresence {
+            prompt: true,
+            completion: false,
+            total: true,
+            cached: false,
+        }
+    );
+
+    // A later frame that does carry `completion_tokens: 0` must add the flag
+    // without clearing the ones already observed.
+    acc.set_usage_with_presence(
+        OpenAIUsage {
+            prompt_tokens: 17,
+            completion_tokens: 0,
+            total_tokens: 17,
+            prompt_tokens_details: None,
+        },
+        UsagePresence {
+            prompt: true,
+            completion: true,
+            total: true,
+            cached: false,
+        },
+    );
+    assert_eq!(
+        acc.usage_presence(),
+        UsagePresence {
+            prompt: true,
+            completion: true,
+            total: true,
+            cached: false,
+        }
+    );
+}
+
 /// Gemini reports `cachedContentTokenCount` on some `usageMetadata` chunks
 /// and not on others. A later sparser chunk must not wipe the cache counter.
 #[test]

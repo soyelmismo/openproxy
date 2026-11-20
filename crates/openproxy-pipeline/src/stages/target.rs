@@ -171,14 +171,20 @@ pub(crate) fn apply_predictive_ttft_budget(
     mut resolved: crate::timeouts::Timeouts,
 ) -> crate::timeouts::Timeouts {
     let (trace_id, attempt_elapsed_ms) = attempt_trace;
-    let effective_messages = req
+    // TTFT prediction only needs the logarithmic prompt-size bucket, not a
+    // billing-grade count. Borrow the effective messages (no deep clone) and
+    // use the allocation-free bucket hint instead of running a BPE tokenizer
+    // on every attempt.
+    let effective_messages: &[openproxy_types::OpenAIMessage] = req
         .compressed_messages
         .get()
-        .cloned()
-        .flatten()
-        .unwrap_or_else(|| req.openai_request.messages.clone());
+        .and_then(|opt| opt.as_deref())
+        .unwrap_or(&req.openai_request.messages);
     let est_prompt_tokens =
-        openproxy_compression::token_estimate::estimate_prompt_tokens(&effective_messages).max(1);
+        openproxy_compression::token_estimate::estimate_prompt_tokens_bucket_hint(
+            effective_messages,
+        )
+        .max(1);
     let session_hash = crate::session_affinity::SessionAffinityRegistry::extract_session_hash(req);
     let budget_ms = pipeline.latency_budget.ttft_budget_ms(
         provider_str,

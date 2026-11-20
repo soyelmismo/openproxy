@@ -12,9 +12,22 @@ use openproxy_types::error::CoreError;
 use std::time::Instant;
 
 use super::super::translation::ensure_usage_populated;
-use super::super::translation::translate_non_streaming_body;
+use super::super::translation::translate_non_streaming_body_with_presence;
 use super::is_empty_response;
 use super::sink::emit_unary_response_to_stream_sink;
+
+/// Folded responses (Kiro/Devin/CommandCode SSE) synthesize a complete usage
+/// object from upstream events; when it exists, all its fields are observed
+/// by construction. This is not a re-read of a reserialized JSON body.
+fn synthetic_usage_presence(
+    resp: &openproxy_types::OpenAIResponse,
+) -> openproxy_types::UsagePresence {
+    if resp.usage.is_some() {
+        openproxy_types::UsagePresence::all()
+    } else {
+        openproxy_types::UsagePresence::none()
+    }
+}
 
 impl UpstreamDispatcher {
     pub(crate) async fn dispatch_upstream_non_streaming(
@@ -159,14 +172,15 @@ impl UpstreamDispatcher {
         // or AWS EventStream binary). A unary client folds the whole body into
         // an OpenAI response instead of parsing as JSON.
         let is_kiro = params.target.provider_id.as_str() == "kiro";
-        let (response_body_raw, mut openai_response) = if is_kiro {
+        let (response_body_raw, mut openai_response, usage_presence) = if is_kiro {
             match openproxy_adapters::adapters::kiro::fold_kiro_body_to_openai_response(
                 &body_bytes,
                 &params.req.openai_request.model,
             ) {
                 Ok(resp) => {
+                    let presence = synthetic_usage_presence(&resp);
                     let raw = serde_json::to_value(&resp).unwrap_or_default();
-                    (raw, resp)
+                    (raw, resp, presence)
                 }
                 Err(err) => {
                     return self
@@ -192,8 +206,9 @@ impl UpstreamDispatcher {
                         &params.req.openai_request.model,
                     ) {
                         Ok(resp) => {
+                            let presence = synthetic_usage_presence(&resp);
                             let raw = serde_json::to_value(&resp).unwrap_or_default();
-                            (raw, resp)
+                            (raw, resp, presence)
                         }
                         Err(err) => {
                             return self
@@ -214,15 +229,12 @@ impl UpstreamDispatcher {
                 }
                 _ => match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
                     Ok(raw) => {
-                        let resp = match translate_non_streaming_body(
+                        let (resp, presence) = match translate_non_streaming_body_with_presence(
                             params.target_format,
                             &raw,
                             &params.req,
                         ) {
-                            Ok(r) => {
-                                let think_extracted = extract_think_from_response(r);
-                                extract_inline_tools_from_response(think_extracted)
-                            }
+                            Ok(r) => r,
                             Err(err) => {
                                 return self
                                     .record_and_fail(
@@ -239,7 +251,9 @@ impl UpstreamDispatcher {
                                     .await;
                             }
                         };
-                        (raw, resp)
+                        let think_extracted = extract_think_from_response(resp);
+                        let resp = extract_inline_tools_from_response(think_extracted);
+                        (raw, resp, presence)
                     }
                     Err(e) => {
                         let body_str = String::from_utf8_lossy(&body_bytes);
@@ -250,15 +264,19 @@ impl UpstreamDispatcher {
                             || body_str.contains("\nevent:")
                             || (body_str.trim_start().starts_with('{') && body_str.contains('\n'))
                         {
-                            match crate::sse::parse_sse_stream_to_openai_response(
+                            match crate::sse::parse_sse_stream_to_openai_response_with_presence(
                                 params.target_format,
                                 &body_str,
                                 &params.req.openai_request.model,
                             ) {
-                                Ok(resp) => {
+                                Ok((resp, presence)) => {
                                     let raw = serde_json::to_value(&resp).unwrap_or_default();
                                     let think_extracted = extract_think_from_response(resp);
-                                    (raw, extract_inline_tools_from_response(think_extracted))
+                                    (
+                                        raw,
+                                        extract_inline_tools_from_response(think_extracted),
+                                        presence,
+                                    )
                                 }
                                 Err(err) => {
                                     return self
@@ -331,9 +349,25 @@ impl UpstreamDispatcher {
             session.restore_openai_response(&mut openai_response);
         }
 
-        // Guarantee robust BPE token estimation if upstream omitted usage or returned 0
-        let usage_estimated =
-            ensure_usage_populated(&mut openai_response, &params.req.openai_request);
+        // Guarantee robust BPE token estimation if upstream omitted usage.
+        // Presence is tracked per field from the raw upstream body so an
+        // explicit zero is preserved as observed rather than re-estimated.
+        // No dispatcher rail proves it forwards the request body byte-for-byte:
+        // the OpenAI formatter normalizes messages and tool schemas and then
+        // calls the provider adapter, which may rewrite the payload. The pinned
+        // Qwen template therefore stays an offline reference and every
+        // production rail keeps the clearly-estimated heuristic.
+        let prompt_rail = openproxy_compression::token_estimate::PromptRail::Translated;
+        let usage_fill = ensure_usage_populated(
+            &mut openai_response,
+            &params.req.openai_request,
+            Some(params.model.model_id.as_str()),
+            usage_presence,
+            prompt_rail,
+        );
+        // Snapshot before the client-only prefix discount: the usage tracker
+        // must never persist a value read back from the adjusted client wire.
+        let recorded_usage = openai_response.usage.clone();
 
         // If a system prefix was injected dynamically into this target, discount its tokens
         // from usage.prompt_tokens so the downstream client observes exact, untampered billing.
@@ -346,19 +380,17 @@ impl UpstreamDispatcher {
                 tool_calls: None,
                 extra: Default::default(),
             }];
+            // Same tokenizer as ensure_usage_populated used above: the
+            // resolved target model id, never the client-facing combo name.
+            let model = Some(params.model.model_id.as_str());
             let prefix_tokens =
-                openproxy_compression::token_estimate::estimate_prompt_tokens(&prefix_msg);
-            let client_est = openproxy_compression::token_estimate::estimate_prompt_tokens(
-                &params.req.openai_request.messages,
-            )
-            .max(1);
+                openproxy_compression::token_estimate::estimate_prompt_tokens(&prefix_msg, model);
 
             if let Some(ref mut u) = openai_response.usage {
-                u.prompt_tokens = u
-                    .prompt_tokens
-                    .saturating_sub(prefix_tokens)
-                    .max(client_est);
-                u.total_tokens = u.prompt_tokens + u.completion_tokens;
+                // Client-only discount. Never raise the upstream value back up
+                // with a heuristic floor: a clamp that increases prompt_tokens
+                // would make the client wire disagree with the observed usage.
+                crate::dispatcher::translation::discount_client_prefix(u, prefix_tokens);
             }
         }
 
@@ -399,7 +431,8 @@ impl UpstreamDispatcher {
                 response_headers,
                 response_body_raw: recorded_response_body,
                 openai_response,
-                usage_estimated,
+                recorded_usage,
+                usage_fill,
             },
         )
         .await

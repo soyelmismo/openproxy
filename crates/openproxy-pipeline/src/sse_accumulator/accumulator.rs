@@ -25,6 +25,7 @@ pub struct ResponseAccumulator {
     /// `update_anthropic_tool_use`.
     tool_calls: Vec<AccumulatedToolCall>,
     usage: Option<OpenAIUsage>,
+    usage_presence: openproxy_types::UsagePresence,
     stop_reason: Option<String>,
     /// Total bytes currently held in `content` + `reasoning` + tool call arguments.
     total_bytes: usize,
@@ -51,6 +52,7 @@ impl ResponseAccumulator {
             reasoning: None,
             tool_calls: Vec::new(),
             usage: None,
+            usage_presence: openproxy_types::UsagePresence::none(),
             stop_reason: None,
             total_bytes: 0,
             truncated: false,
@@ -178,6 +180,31 @@ impl ResponseAccumulator {
         });
     }
 
+    /// Stores usage together with the per-field presence observed by the SSE
+    /// parser. Presence is merged field-wise and never inferred from the
+    /// reserialized finish body.
+    pub fn set_usage_with_presence(
+        &mut self,
+        usage: OpenAIUsage,
+        presence: openproxy_types::UsagePresence,
+    ) {
+        let (merged, merged_presence) = match self.usage.take() {
+            Some(existing) => crate::sse::merge_usage_with_presence(
+                existing,
+                self.usage_presence,
+                usage,
+                presence,
+            ),
+            None => (usage, self.usage_presence.merge(presence)),
+        };
+        self.usage = Some(merged);
+        self.usage_presence = merged_presence;
+    }
+
+    pub fn usage_presence(&self) -> openproxy_types::UsagePresence {
+        self.usage_presence
+    }
+
     pub fn has_stop_reason(&self) -> bool {
         self.stop_reason.is_some()
     }
@@ -291,6 +318,13 @@ impl ResponseAccumulator {
             None
         };
 
+        // Materialize a coherent wire total without marking it as observed:
+        // the merge kept only real observations, and presence stays `false`.
+        let mut usage = self.usage.clone();
+        if let Some(usage) = usage.as_mut() {
+            crate::dispatcher::translation::materialize_wire_total(usage, self.usage_presence);
+        }
+
         let response = FinishResponse {
             id: chunk_id,
             object: "chat.completion",
@@ -308,7 +342,7 @@ impl ResponseAccumulator {
                 },
                 finish_reason,
             }],
-            usage: self.usage.as_ref(),
+            usage: usage.as_ref(),
             raw_response_body,
         };
 

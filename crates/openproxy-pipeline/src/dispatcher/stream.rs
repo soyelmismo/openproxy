@@ -588,19 +588,13 @@ impl UpstreamDispatcher {
         args: StreamingSuccessArgs<'_>,
     ) -> PipelineResult {
         let usage = args.state.usage;
+        let usage_presence = args.state.usage_presence;
         let acc = args.state.acc;
         let ttft_ms = args.state.ttft_ms;
         let stop_reason = args.state.stop_reason;
         let done_sent = args.state.done_sent;
         let chunk_gap_telemetry = (args.state.max_chunk_gap_ms, args.state.avg_chunk_gap_ms);
         let total_ms = params.started.elapsed().as_millis() as u64;
-
-        let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens);
-        let completion_tokens = usage.as_ref().map(|u| u.completion_tokens);
-        let cached_tokens = usage
-            .as_ref()
-            .and_then(|u| u.prompt_tokens_details.as_ref())
-            .and_then(|d| d.cached_tokens);
 
         let raw_response_body_json: Option<serde_json::Value> = acc
             .as_ref()
@@ -638,13 +632,128 @@ impl UpstreamDispatcher {
             None
         };
 
+        let mut usage_fill = crate::dispatcher::translation::UsageFill::default();
+        // See the unary path: `TargetFormat::Openai` only names the upstream
+        // dialect, not an identity payload (the formatter normalizes messages
+        // and tools and the adapter may rewrite them), so no rail qualifies
+        // for the pinned template.
+        let prompt_rail = openproxy_compression::token_estimate::PromptRail::Translated;
+        let mut recording_usage = usage.clone();
         if let Some(resp) = final_response.as_mut() {
             for choice in &mut resp.choices {
                 choice.message.extra.remove("raw_response_body");
             }
-            // Populate robust BPE token estimation if upstream omitted usage in streaming fold
-            crate::dispatcher::unary::ensure_usage_populated(resp, &params.req.openai_request);
+            usage_fill = crate::dispatcher::unary::ensure_usage_populated(
+                resp,
+                &params.req.openai_request,
+                Some(params.model.model_id.as_str()),
+                usage_presence,
+                prompt_rail,
+            );
+            recording_usage = resp.usage.clone();
+        } else if usage.is_some() || usage_presence.any() {
+            // Non-discard streams have no materialized `final_response`. When
+            // every billed field arrived upstream there is nothing to
+            // estimate, so no throwaway `OpenAIResponse` is materialized: the
+            // observed fold is already the recording usage.
+            usage_fill = crate::dispatcher::translation::UsageFill {
+                estimated: (!usage_presence.prompt, !usage_presence.completion),
+                observed: usage
+                    .as_ref()
+                    .map(|u| crate::dispatcher::translation::ObservedUsage {
+                        prompt: usage_presence.prompt.then_some(u.prompt_tokens),
+                        completion: usage_presence.completion.then_some(u.completion_tokens),
+                        total: usage_presence.total.then_some(u.total_tokens),
+                        cached: usage_presence
+                            .cached
+                            .then(|| {
+                                u.prompt_tokens_details
+                                    .as_ref()
+                                    .and_then(|d| d.cached_tokens)
+                            })
+                            .flatten(),
+                    }),
+            };
+            if !usage_presence.prompt || !usage_presence.completion {
+                // Only now materialize the accumulated body to estimate the
+                // fields upstream omitted. Presence still comes from the
+                // parser, never from this reserialized body.
+                if let Some(mut resp) = response_body_json
+                    .as_ref()
+                    .and_then(|v| serde::Deserialize::deserialize(v).ok())
+                {
+                    let fill = crate::dispatcher::unary::ensure_usage_populated(
+                        &mut resp,
+                        &params.req.openai_request,
+                        Some(params.model.model_id.as_str()),
+                        usage_presence,
+                        prompt_rail,
+                    );
+                    usage_fill.estimated = fill.estimated;
+                    recording_usage = resp.usage.clone();
+                } else {
+                    let prompt =
+                        openproxy_compression::token_estimate::estimate_request_prompt_tokens_for_rail(
+                            &params.req.openai_request,
+                            Some(params.model.model_id.as_str()),
+                            prompt_rail,
+                        )
+                        .max(1);
+                    let completion = 1;
+                    recording_usage = Some(openproxy_types::OpenAIUsage {
+                        prompt_tokens: prompt,
+                        completion_tokens: completion,
+                        total_tokens: prompt.saturating_add(completion),
+                        prompt_tokens_details: None,
+                    });
+                }
+            } else {
+                recording_usage = usage.clone();
+            }
         }
+
+        // Client-wire-only adjustment, applied after `recording_usage` and
+        // `usage_fill` captured the raw observation. `stream=false` uses a
+        // `Discard` sink, so this `final_response` is what the client gets;
+        // without the discount it would bill the injected system prefix.
+        // When upstream never reported the prompt, the value here is an
+        // estimate over the original request (which did not include the
+        // prefix): subtracting would invent a discount that was never billed.
+        if let Some(resp) = final_response.as_mut()
+            && usage_presence.prompt
+            && let Some(ref prefix) = *params.req.active_system_prefix.lock()
+            && let Some(usage) = resp.usage.as_mut()
+        {
+            let prefix_tokens = crate::dispatcher::translation::injected_prefix_tokens(
+                prefix,
+                Some(params.model.model_id.as_str()),
+            );
+            crate::dispatcher::translation::discount_client_prefix(usage, prefix_tokens);
+        }
+
+        let observed = usage_fill.observed;
+        let prompt_tokens = observed
+            .and_then(|o| o.prompt)
+            .or_else(|| recording_usage.as_ref().map(|u| u.prompt_tokens))
+            .or_else(|| usage.as_ref().map(|u| u.prompt_tokens));
+        let completion_tokens = observed
+            .and_then(|o| o.completion)
+            .or_else(|| recording_usage.as_ref().map(|u| u.completion_tokens))
+            .or_else(|| usage.as_ref().map(|u| u.completion_tokens));
+        let cached_tokens = observed
+            .and_then(|o| o.cached)
+            .or_else(|| {
+                recording_usage
+                    .as_ref()
+                    .and_then(|u| u.prompt_tokens_details.as_ref())
+                    .and_then(|d| d.cached_tokens)
+            })
+            .or_else(|| {
+                usage
+                    .as_ref()
+                    .and_then(|u| u.prompt_tokens_details.as_ref())
+                    .and_then(|d| d.cached_tokens)
+            });
 
         let is_client_response = !matches!(
             params.req.stream_sink.as_ref(),
@@ -720,6 +829,7 @@ impl UpstreamDispatcher {
         .is_streaming(true)
         .stream_complete(done_sent)
         .client_response(is_client_response)
+        .usage_estimated(usage_fill.estimated)
         .stop_reason(effective_stop_reason)
         .record()
         .await

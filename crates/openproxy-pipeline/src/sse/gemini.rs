@@ -16,6 +16,12 @@ struct GeminiSseProbe {
     candidates: Vec<GeminiCandidateProbe>,
     #[serde(default, rename = "usageMetadata")]
     usage_metadata: Option<GeminiUsageProbe>,
+    // The snake_case spelling is a separate field instead of a
+    // `#[serde(alias)]`: upstreams do emit both spellings in one object, and
+    // an alias makes serde reject the frame with `duplicate field`. CamelCase
+    // keeps canonical precedence in `extract_gemini_usage_metadata`.
+    #[serde(default, rename = "usage_metadata")]
+    usage_metadata_snake: Option<GeminiUsageProbe>,
     #[serde(default)]
     response: Option<GeminiInnerSseProbe>,
 }
@@ -26,6 +32,8 @@ struct GeminiInnerSseProbe {
     candidates: Vec<GeminiCandidateProbe>,
     #[serde(default, rename = "usageMetadata")]
     usage_metadata: Option<GeminiUsageProbe>,
+    #[serde(default, rename = "usage_metadata")]
+    usage_metadata_snake: Option<GeminiUsageProbe>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -64,16 +72,46 @@ struct GeminiPartProbe {
     function_call: Option<GeminiFunctionCallProbe>,
 }
 
-#[derive(serde::Deserialize)]
+/// Gemini usage counters. CamelCase and snake_case are separate fields on
+/// purpose: an upstream can emit both spellings in the same object, and
+/// `#[serde(alias)]` would abort the frame with `duplicate field`. The
+/// canonical camelCase spelling takes precedence; snake_case is the fallback.
+#[derive(serde::Deserialize, Default)]
 struct GeminiUsageProbe {
     #[serde(default, rename = "promptTokenCount")]
     prompt_tokens: Option<u64>,
+    #[serde(default, rename = "prompt_token_count")]
+    prompt_tokens_snake: Option<u64>,
     #[serde(default, rename = "candidatesTokenCount")]
     completion_tokens: Option<u64>,
+    #[serde(default, rename = "candidates_token_count")]
+    completion_tokens_snake: Option<u64>,
     #[serde(default, rename = "totalTokenCount")]
     total_tokens: Option<u64>,
+    #[serde(default, rename = "total_token_count")]
+    total_tokens_snake: Option<u64>,
     #[serde(default, rename = "cachedContentTokenCount")]
     cached_tokens: Option<u64>,
+    #[serde(default, rename = "cached_content_token_count")]
+    cached_tokens_snake: Option<u64>,
+}
+
+impl GeminiUsageProbe {
+    fn prompt(&self) -> Option<u64> {
+        self.prompt_tokens.or(self.prompt_tokens_snake)
+    }
+
+    fn completion(&self) -> Option<u64> {
+        self.completion_tokens.or(self.completion_tokens_snake)
+    }
+
+    fn total(&self) -> Option<u64> {
+        self.total_tokens.or(self.total_tokens_snake)
+    }
+
+    fn cached(&self) -> Option<u64> {
+        self.cached_tokens.or(self.cached_tokens_snake)
+    }
 }
 
 /// Map a Gemini finishReason to an OpenAI finish_reason string.
@@ -99,12 +137,17 @@ fn extract_gemini_candidates(probe: &GeminiSseProbe) -> &[GeminiCandidateProbe] 
 }
 
 fn extract_gemini_usage_metadata(probe: &GeminiSseProbe) -> Option<&GeminiUsageProbe> {
-    probe.usage_metadata.as_ref().or_else(|| {
-        probe
-            .response
-            .as_ref()
-            .and_then(|r| r.usage_metadata.as_ref())
-    })
+    probe
+        .usage_metadata
+        .as_ref()
+        .or(probe.usage_metadata_snake.as_ref())
+        .or_else(|| {
+            probe.response.as_ref().and_then(|r| {
+                r.usage_metadata
+                    .as_ref()
+                    .or(r.usage_metadata_snake.as_ref())
+            })
+        })
 }
 
 fn extract_gemini_parts(
@@ -133,15 +176,55 @@ fn extract_gemini_parts(
     (content_parts, dr, function_calls)
 }
 
+fn extract_gemini_usage_presence(
+    usage_metadata: Option<&GeminiUsageProbe>,
+) -> openproxy_types::UsagePresence {
+    usage_metadata.map_or_else(openproxy_types::UsagePresence::none, |u| {
+        openproxy_types::UsagePresence {
+            prompt: u.prompt().is_some(),
+            completion: u.completion().is_some(),
+            total: u.total().is_some(),
+            cached: u.cached().is_some(),
+        }
+    })
+}
+
+/// Internal (non-wire) usage: every field the upstream reported, with the
+/// missing ones left at zero and flagged absent by
+/// [`extract_gemini_usage_presence`]. Gemini emits `usageMetadata` on several
+/// frames and the cache counter frequently arrives without a candidate count,
+/// so dropping the whole block would discard observed prompt/cache tokens.
+/// `None` only when the metadata carried no counter at all.
+fn extract_gemini_usage_internal(usage_metadata: Option<&GeminiUsageProbe>) -> Option<OpenAIUsage> {
+    let u = usage_metadata?;
+    if u.prompt().is_none()
+        && u.completion().is_none()
+        && u.total().is_none()
+        && u.cached().is_none()
+    {
+        return None;
+    }
+    Some(super::build_openai_usage(
+        u.prompt(),
+        u.completion(),
+        u.total(),
+        u.cached()
+            .map(|cached| openproxy_types::PromptTokensDetails {
+                cached_tokens: Some(cached.try_into().unwrap_or(u32::MAX)),
+            }),
+    ))
+}
+
 fn extract_gemini_usage(usage_metadata: Option<&GeminiUsageProbe>) -> Option<OpenAIUsage> {
     let u = usage_metadata?;
-    // Partial usage metadata is dropped rather than emitting an `OpenAIUsage`
+    // Wire contract: only a complete observation is emitted. Partial usage
+    // metadata is dropped from the frame rather than emitting an `OpenAIUsage`
     // of `0`s, which would corrupt downstream billing.
     Some(super::build_openai_usage(
-        Some(u.prompt_tokens?),
-        Some(u.completion_tokens?),
-        Some(u.total_tokens?),
-        u.cached_tokens
+        Some(u.prompt()?),
+        Some(u.completion()?),
+        Some(u.total()?),
+        u.cached()
             .map(|cached| openproxy_types::PromptTokensDetails {
                 cached_tokens: Some(cached.try_into().unwrap_or(u32::MAX)),
             }),
@@ -281,8 +364,14 @@ pub fn parse_gemini_sse_line(
         }],
     });
 
-    let usage = extract_gemini_usage(usage_metadata);
-    if let Some(usage) = &usage {
+    // Wire usage: only a complete observation is serialized into the frame, as
+    // before. `internal_usage` additionally keeps the fields that did arrive
+    // (prompt-only, cache-only) so the fold and the usage record do not lose an
+    // observed count just because a sibling counter is missing.
+    let wire_usage = extract_gemini_usage(usage_metadata);
+    let internal_usage = extract_gemini_usage_internal(usage_metadata);
+    let usage_presence = extract_gemini_usage_presence(usage_metadata);
+    if let Some(usage) = &wire_usage {
         chunk["usage"] = serde_json::to_value(usage).ctx_parse("gemini usage serialize")?;
     }
     let has_content = !text.is_empty() || delta_reasoning.is_some() || !delta_tool_calls.is_empty();
@@ -292,15 +381,29 @@ pub fn parse_gemini_sse_line(
     // reasoning server-side) or an empty generation response heartbeat, emit a liveness chunk.
     // This notifies the streaming body stream that upstream generation is in progress,
     // switching off the TTFT deadline without emitting empty null content to the client.
-    if !has_content && finish_reason.is_none() && usage.is_none() {
-        return Ok(Some(UpstreamSseChunk::liveness()));
+    // If the chunk carries no visible output, no finish reason and no complete
+    // wire usage, it must not be forwarded (liveness). The counters that did
+    // arrive still ride along so the fold/record keeps the observation.
+    if !has_content && finish_reason.is_none() && wire_usage.is_none() {
+        return Ok(Some(UpstreamSseChunk {
+            raw_payload: None,
+            payload: Value::Null,
+            done: false,
+            usage: internal_usage,
+            usage_presence,
+            stop_reason: None,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: false,
+        }));
     }
 
     Ok(Some(UpstreamSseChunk {
         raw_payload: None,
         payload: chunk,
         done: false,
-        usage,
+        usage: internal_usage,
+        usage_presence,
         stop_reason: finish_reason,
         delta_reasoning,
         delta_tool_calls,
@@ -511,6 +614,176 @@ mod tests {
         assert_eq!(u.completion_tokens, 7);
         assert_eq!(u.total_tokens, 10);
         assert!(chunk.payload["choices"][0]["finish_reason"].is_null());
+    }
+
+    #[test]
+    fn gemini_usage_from_response_wrapper_and_snake_case_aliases() {
+        // The Gemini adapter accepts a `response` envelope and snake_case
+        // keys; usage parsing must accept the same shapes instead of only the
+        // root-level camelCase `usageMetadata`.
+        let wrapped = r#"data: {"response":{"candidates":[{"content":{"parts":[{"text":"hi"}]}}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4,"totalTokenCount":15,"cachedContentTokenCount":8}}}"#;
+        let chunk = parse_gemini_sse_line(wrapped, "id", 0, "m")
+            .unwrap()
+            .unwrap();
+        let u = chunk.usage.expect("wrapper usage");
+        assert_eq!(u.prompt_tokens, 11);
+        assert_eq!(u.completion_tokens, 4);
+        assert_eq!(u.total_tokens, 15);
+        assert_eq!(
+            u.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            Some(8)
+        );
+        assert_eq!(
+            chunk.usage_presence,
+            openproxy_types::UsagePresence {
+                prompt: true,
+                completion: true,
+                total: true,
+                cached: true,
+            }
+        );
+
+        let snake = r#"data: {"usage_metadata":{"prompt_token_count":9,"candidates_token_count":3,"total_token_count":12,"cached_content_token_count":2}}"#;
+        let chunk = parse_gemini_sse_line(snake, "id", 0, "m").unwrap().unwrap();
+        let u = chunk.usage.expect("snake_case usage");
+        assert_eq!(u.prompt_tokens, 9);
+        assert_eq!(u.completion_tokens, 3);
+        assert_eq!(u.total_tokens, 12);
+        assert!(chunk.usage_presence.cached);
+    }
+
+    #[test]
+    fn gemini_dual_camel_and_snake_case_in_one_object_parses() {
+        // The review probe saw `duplicate field` when both spellings arrived
+        // in the same usage object (a `#[serde(alias)]` artifact). The frame
+        // must parse, with camelCase winning.
+        let line = r#"data: {"usageMetadata":{"promptTokenCount":47,"prompt_token_count":47,"candidatesTokenCount":0,"totalTokenCount":47}}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m")
+            .expect("both spellings must parse")
+            .expect("chunk");
+        let u = chunk.usage.expect("usage");
+        assert_eq!(u.prompt_tokens, 47);
+        assert_eq!(u.completion_tokens, 0);
+        assert_eq!(u.total_tokens, 47);
+        assert!(
+            chunk.usage_presence.completion,
+            "the explicit zero is present"
+        );
+        assert_eq!(u.prompt_tokens, 47, "camelCase takes canonical precedence");
+    }
+
+    #[test]
+    fn gemini_dual_usage_metadata_and_usage_metadata_keys_parse() {
+        // Both `usageMetadata` and `usage_metadata` present at the top level:
+        // camelCase is canonical, the snake_case one is not a hard error.
+        let line = r#"data: {"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7},"usage_metadata":{"prompt_token_count":9,"candidates_token_count":3,"total_token_count":12}}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        let u = chunk.usage.expect("usage");
+        assert_eq!(
+            (u.prompt_tokens, u.completion_tokens, u.total_tokens),
+            (5, 2, 7)
+        );
+    }
+
+    #[test]
+    fn gemini_partial_usage_keeps_observed_fields_out_of_the_wire() {
+        // Partial metadata (prompt+total, no candidates) must not fabricate a
+        // completion, but the counters that did arrive are still observations:
+        // they stay in the internal usage for the fold/record while the frame
+        // keeps carrying no usage block, exactly as before.
+        let line = r#"data: {"usageMetadata":{"promptTokenCount":5,"totalTokenCount":5}}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        assert!(
+            chunk.payload.get("usage").is_none(),
+            "the wire must not gain a partial usage block"
+        );
+        assert_eq!(
+            chunk.usage_presence,
+            openproxy_types::UsagePresence {
+                prompt: true,
+                completion: false,
+                total: true,
+                cached: false,
+            }
+        );
+        let u = chunk
+            .usage
+            .expect("internal usage keeps the observed fields");
+        assert_eq!(u.prompt_tokens, 5);
+        assert_eq!(u.total_tokens, 5);
+    }
+
+    #[test]
+    fn gemini_cache_only_frame_keeps_prompt_and_cached_observation() {
+        // 47 prompt + 31 cached with no candidates counter: the review probe
+        // saw both dropped. They must survive internally and stay flagged.
+        let line =
+            r#"data: {"usageMetadata":{"promptTokenCount":47,"cachedContentTokenCount":31}}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        assert!(chunk.payload.get("usage").is_none());
+        assert_eq!(
+            chunk.usage_presence,
+            openproxy_types::UsagePresence {
+                prompt: true,
+                completion: false,
+                total: false,
+                cached: true,
+            }
+        );
+        let u = chunk.usage.expect("internal usage");
+        assert_eq!(u.prompt_tokens, 47);
+        assert_eq!(
+            u.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            Some(31)
+        );
+    }
+
+    #[test]
+    fn gemini_split_cache_across_frames_is_not_lost() {
+        // Real Gemini streams report the prompt on one frame and the cache
+        // counter on a later one. Folding must keep both, and the presence
+        // flags must be the union of what each frame declared.
+        let first = r#"data: {"usageMetadata":{"promptTokenCount":47,"candidatesTokenCount":9,"totalTokenCount":56}}"#;
+        let second = r#"data: {"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"cachedContentTokenCount":31,"totalTokenCount":56}}"#;
+        let (resp, presence) = crate::sse::parse_sse_stream_to_openai_response_with_presence(
+            openproxy_types::TargetFormat::Gemini,
+            &format!("{first}\n\n{second}\n\n"),
+            "gemini-2.5-pro",
+        )
+        .unwrap();
+        let u = resp.usage.expect("folded usage");
+        assert_eq!(u.prompt_tokens, 47);
+        assert_eq!(u.completion_tokens, 9);
+        assert_eq!(
+            u.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            Some(31),
+            "cache counter from the later frame survives the fold"
+        );
+        assert_eq!(
+            presence,
+            openproxy_types::UsagePresence {
+                prompt: true,
+                completion: true,
+                total: true,
+                cached: true,
+            }
+        );
+    }
+
+    #[test]
+    fn gemini_explicit_zero_completion_stays_observed() {
+        let line = r#"data: {"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        let u = chunk.usage.expect("explicit zero completion");
+        assert_eq!(u.completion_tokens, 0);
+        assert!(chunk.usage_presence.prompt);
+        assert!(chunk.usage_presence.completion);
     }
 
     #[test]

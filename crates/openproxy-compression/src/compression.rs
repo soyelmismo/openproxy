@@ -91,7 +91,7 @@ pub fn measure_compression<C: TextCompressor>(
     for msg in messages.iter() {
         let id = string_content_identity(msg);
         let chars = msg.extract_text_cow().len();
-        let tokens = crate::token_estimate::estimate_single_message_tokens(msg) as usize;
+        let tokens = crate::token_estimate::estimate_single_message_tokens(msg, None) as usize;
         original_chars += chars;
         original_tokens += tokens;
         pre_snapshots.push((id, chars, tokens));
@@ -122,7 +122,7 @@ pub fn measure_compression<C: TextCompressor>(
         } else {
             compressed_chars += msg.extract_text_cow().len();
             compressed_tokens +=
-                crate::token_estimate::estimate_single_message_tokens(msg) as usize;
+                crate::token_estimate::estimate_single_message_tokens(msg, None) as usize;
         }
     }
 

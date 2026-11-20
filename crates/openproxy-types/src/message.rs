@@ -254,11 +254,79 @@ pub struct PromptTokensDetails {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIUsage {
+    /// Missing fields deserialize as zero so a partial upstream usage block
+    /// (for example prompt+total without completion) does not reject the
+    /// whole response. `UsagePresence` records which fields actually arrived;
+    /// callers must use that to distinguish an explicit zero from absence.
+    #[serde(default)]
     pub prompt_tokens: u32,
+    #[serde(default)]
     pub completion_tokens: u32,
+    #[serde(default)]
     pub total_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+/// Per-field presence of an upstream usage block. `true` means the field was
+/// present in the upstream payload, even when its value was an explicit zero.
+/// This is parsed once, next to the usage object, and carried through
+/// merge/record/fold; it is never reconstructed from a reserialized body.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsagePresence {
+    pub prompt: bool,
+    pub completion: bool,
+    pub total: bool,
+    pub cached: bool,
+}
+
+impl UsagePresence {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            prompt: false,
+            completion: false,
+            total: false,
+            cached: false,
+        }
+    }
+
+    /// Prompt and completion only; retained for the existing tests that model
+    /// the historical OpenAI two-field contract.
+    #[must_use]
+    pub const fn both() -> Self {
+        Self {
+            prompt: true,
+            completion: true,
+            total: false,
+            cached: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn all() -> Self {
+        Self {
+            prompt: true,
+            completion: true,
+            total: true,
+            cached: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn merge(self, other: Self) -> Self {
+        Self {
+            prompt: self.prompt || other.prompt,
+            completion: self.completion || other.completion,
+            total: self.total || other.total,
+            cached: self.cached || other.cached,
+        }
+    }
+
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.prompt || self.completion || self.total || self.cached
+    }
 }
 
 fn deserialize_optional_content<'de, D>(

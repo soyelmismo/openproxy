@@ -120,6 +120,7 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
             payload: Value::Null,
             done: false,
             usage: None,
+            usage_presence: openproxy_types::UsagePresence::none(),
             stop_reason: None,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
@@ -130,6 +131,10 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
     // calls are skipped.
     let probe: OpenAiSseProbe = parse_provider_json(payload, "openai")?;
 
+    let usage_presence = probe.usage.as_ref().map_or_else(
+        openproxy_types::UsagePresence::none,
+        crate::dispatcher::translation::openai_usage_presence_in,
+    );
     let usage = probe.usage.map(|u| {
         let cached = usage_cached_tokens(&u)
             .or_else(|| {
@@ -173,6 +178,7 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
         payload: Value::Null,
         done: false,
         usage,
+        usage_presence,
         stop_reason: finish_reason,
         delta_reasoning,
         delta_tool_calls: Vec::new(),
@@ -200,6 +206,68 @@ mod tests {
     fn parse_openai_done() {
         let chunk = parse_openai_sse_line("data: [DONE]").unwrap().unwrap();
         assert!(chunk.done);
+    }
+
+    /// The two frames the independent probe compared fold identically, so the
+    /// parser must carry per-field presence: `completion_tokens` absent is not
+    /// an observed zero.
+    #[test]
+    fn usage_presence_distinguishes_absent_from_explicit_zero() {
+        use openproxy_types::UsagePresence;
+
+        let absent = parse_openai_sse_line(
+            r#"data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":null}],"usage":{"prompt_tokens":17,"total_tokens":17}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(absent.usage.as_ref().unwrap().prompt_tokens, 17);
+        // The struct default fills the missing field with 0 ...
+        assert_eq!(absent.usage.as_ref().unwrap().completion_tokens, 0);
+        // ... but presence records that it never arrived.
+        assert_eq!(
+            absent.usage_presence,
+            UsagePresence {
+                prompt: true,
+                completion: false,
+                total: true,
+                cached: false,
+            }
+        );
+
+        let explicit_zero = parse_openai_sse_line(
+            r#"data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":null}],"usage":{"prompt_tokens":17,"total_tokens":17,"completion_tokens":0}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            explicit_zero.usage_presence,
+            UsagePresence {
+                prompt: true,
+                completion: true,
+                total: true,
+                cached: false,
+            }
+        );
+    }
+
+    #[test]
+    fn usage_presence_marks_cache_details_and_absent_usage() {
+        use openproxy_types::UsagePresence;
+
+        let cached = parse_openai_sse_line(
+            r#"data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"m","choices":[],"usage":{"prompt_tokens":40,"completion_tokens":2,"total_tokens":42,"prompt_tokens_details":{"cached_tokens":32}}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(cached.usage_presence.cached);
+        assert!(cached.usage_presence.prompt);
+
+        let no_usage = parse_openai_sse_line(
+            r#"data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(no_usage.usage_presence, UsagePresence::none());
     }
 
     #[test]

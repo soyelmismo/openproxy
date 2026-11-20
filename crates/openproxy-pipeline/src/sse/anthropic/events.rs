@@ -95,6 +95,7 @@ fn handle_anthropic_input_json_delta(
         payload: chunk,
         done: false,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: vec![tool_call_obj],
@@ -153,6 +154,7 @@ fn handle_anthropic_text_delta(
         payload: chunk,
         done: false,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: Vec::new(),
@@ -257,6 +259,7 @@ fn translate_anthropic_content_block_start(
         payload: chunk,
         done: false,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: vec![tool_call_obj],
@@ -359,6 +362,10 @@ fn translate_anthropic_full_message(
         .first()
         .and_then(|c| c.finish_reason.clone())
         .unwrap_or_else(|| "stop".to_string());
+    let usage_presence = serde_json::from_str::<serde_json::Value>(data_json).map_or_else(
+        |_| openproxy_types::UsagePresence::none(),
+        |raw| crate::dispatcher::translation::anthropic_usage_presence(&raw),
+    );
 
     let payload = serde_json::json!({
         "id": chunk_id,
@@ -377,6 +384,7 @@ fn translate_anthropic_full_message(
         payload,
         done: true,
         usage: openai.usage,
+        usage_presence,
         stop_reason: resp.stop_reason,
         delta_reasoning: (!reasoning_out.is_empty()).then_some(reasoning_out),
         delta_tool_calls: Vec::new(),

@@ -16,6 +16,7 @@ pub(crate) const MAX_RESPONSES_TOOL_CALL_ARGS_BYTES: usize = 1_048_576; // 1 MiB
 pub struct ResponsesSseState {
     pub tool_calls: Vec<serde_json::Value>,
     pub usage: Option<OpenAIUsage>,
+    pub usage_presence: openproxy_types::UsagePresence,
 }
 
 fn find_tool_call_index(tool_calls: &[Value], item_id: &str, call_id: &str) -> Option<usize> {
@@ -42,6 +43,7 @@ pub fn parse_responses_sse_stream_line(
         super::SseDataOrDone::Done => {
             let mut chunk = UpstreamSseChunk::done();
             chunk.usage = state.usage.clone();
+            chunk.usage_presence = state.usage_presence;
             return Ok(Some(chunk));
         }
         super::SseDataOrDone::Skip => return Ok(None),
@@ -73,48 +75,61 @@ pub fn parse_responses_sse_stream_line(
     }
 
     let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    let usage = value
+    let usage_raw = value
         .get("usage")
-        .or_else(|| value.get("response").and_then(|r| r.get("usage")))
-        .map(|u| {
-            let prompt_tokens = u
-                .get("input_tokens")
-                .or_else(|| u.get("prompt_tokens"))
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(0);
-            let completion_tokens = u
-                .get("output_tokens")
-                .or_else(|| u.get("completion_tokens"))
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(0);
-            let total_tokens = u
-                .get("total_tokens")
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
+        .or_else(|| value.get("response").and_then(|r| r.get("usage")));
+    let usage_presence = usage_raw.map_or_else(
+        openproxy_types::UsagePresence::none,
+        crate::dispatcher::translation::openai_usage_presence_in,
+    );
+    let usage = usage_raw.map(|u| {
+        let prompt_tokens = u
+            .get("input_tokens")
+            .or_else(|| u.get("prompt_tokens"))
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
+        let completion_tokens = u
+            .get("output_tokens")
+            .or_else(|| u.get("completion_tokens"))
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
+        let total_tokens = u
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            // An absent total is not synthesized here: the fold keeps only
+            // observed values and the client materialization derives it.
+            .unwrap_or(0);
 
-            let cached_tokens = crate::translation::responses::extract_responses_cached_tokens(u);
+        let cached_tokens = crate::translation::responses::extract_responses_cached_tokens(u);
 
-            let prompt_tokens_details =
-                cached_tokens.map(|cached| openproxy_types::PromptTokensDetails {
-                    cached_tokens: Some(cached),
-                });
+        let prompt_tokens_details =
+            cached_tokens.map(|cached| openproxy_types::PromptTokensDetails {
+                cached_tokens: Some(cached),
+            });
 
-            OpenAIUsage {
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                prompt_tokens_details,
-            }
-        });
+        OpenAIUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            prompt_tokens_details,
+        }
+    });
 
     if let Some(ref u) = usage {
-        state.usage = Some(match state.usage.take() {
-            Some(existing) => crate::sse::merge_usage(existing, u.clone()),
-            None => u.clone(),
-        });
+        let (merged, merged_presence) = match state.usage.take() {
+            Some(existing) => crate::sse::merge_usage_with_presence(
+                existing,
+                state.usage_presence,
+                u.clone(),
+                usage_presence,
+            ),
+            None => (u.clone(), state.usage_presence.merge(usage_presence)),
+        };
+        state.usage = Some(merged);
+        state.usage_presence = merged_presence;
     }
 
     if matches!(event_type, "response.created" | "response.in_progress") {
@@ -363,7 +378,21 @@ pub fn parse_responses_sse_stream_line(
             _ => Some("stop".to_string()),
         };
 
-        let final_usage = usage.or_else(|| state.usage.clone());
+        let (final_usage, final_usage_presence) = match usage {
+            Some(u) => (Some(u), usage_presence),
+            None => (state.usage.clone(), state.usage_presence),
+        };
+        // The snapshot stays raw: an absent upstream total remains absent from
+        // presence and zero in the fold. The wire payload, however, keeps the
+        // historical behavior of deriving prompt + completion when the total
+        // was not observed, without promoting it to an observed value.
+        let wire_usage = final_usage.as_ref().map(|u| {
+            let mut wire = u.clone();
+            if !final_usage_presence.total {
+                wire.total_tokens = wire.prompt_tokens.saturating_add(wire.completion_tokens);
+            }
+            wire
+        });
         return Ok(Some(UpstreamSseChunk {
             raw_payload: None,
             payload: serde_json::json!({
@@ -376,10 +405,11 @@ pub fn parse_responses_sse_stream_line(
                     "delta": {},
                     "finish_reason": stop_reason
                 }],
-                "usage": final_usage
+                "usage": wire_usage
             }),
             done: false,
             usage: final_usage,
+            usage_presence: final_usage_presence,
             stop_reason,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
@@ -450,6 +480,101 @@ mod tests {
             Some(12)
         );
         assert_eq!(state.usage.as_ref().map(|u| u.completion_tokens), Some(18));
+    }
+
+    #[test]
+    fn responses_completed_omitted_total_derives_wire_total_only() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":61,"output_tokens":18}}}"#;
+
+        let chunk =
+            parse_responses_sse_stream_line(line, "chatcmpl_1", 123, "muse-spark", &mut state)
+                .expect("parse")
+                .expect("chunk");
+
+        assert_eq!(chunk.payload["usage"]["prompt_tokens"].as_u64(), Some(61));
+        assert_eq!(
+            chunk.payload["usage"]["completion_tokens"].as_u64(),
+            Some(18)
+        );
+        assert_eq!(chunk.payload["usage"]["total_tokens"].as_u64(), Some(79));
+
+        let raw = chunk.usage.expect("usage present");
+        assert_eq!(raw.total_tokens, 0);
+        assert!(chunk.usage_presence.prompt);
+        assert!(chunk.usage_presence.completion);
+        assert!(!chunk.usage_presence.total);
+
+        let snapshot = state.usage.as_ref().expect("state usage");
+        assert_eq!(snapshot.total_tokens, 0);
+        assert!(state.usage_presence.prompt);
+        assert!(state.usage_presence.completion);
+        assert!(!state.usage_presence.total);
+    }
+
+    #[test]
+    fn responses_completed_omitted_total_with_missing_addend_keeps_prior_wire() {
+        let mut state = ResponsesSseState::default();
+        let line =
+            r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":61}}}"#;
+
+        let chunk =
+            parse_responses_sse_stream_line(line, "chatcmpl_1", 123, "muse-spark", &mut state)
+                .expect("parse")
+                .expect("chunk");
+
+        assert_eq!(chunk.payload["usage"]["total_tokens"].as_u64(), Some(61));
+
+        let raw = chunk.usage.expect("usage present");
+        assert_eq!(raw.total_tokens, 0);
+        assert_eq!(raw.completion_tokens, 0);
+        assert!(chunk.usage_presence.prompt);
+        assert!(!chunk.usage_presence.completion);
+        assert!(!chunk.usage_presence.total);
+        assert_eq!(
+            state.usage.as_ref().map(|u| u.total_tokens),
+            Some(0),
+            "internal snapshot must not synthesize a total"
+        );
+        assert!(!state.usage_presence.total);
+    }
+
+    #[test]
+    fn responses_completed_explicit_zero_total_is_transmitted_intact() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":61,"output_tokens":18,"total_tokens":0}}}"#;
+
+        let chunk =
+            parse_responses_sse_stream_line(line, "chatcmpl_1", 123, "muse-spark", &mut state)
+                .expect("parse")
+                .expect("chunk");
+
+        assert_eq!(chunk.payload["usage"]["total_tokens"].as_u64(), Some(0));
+
+        let raw = chunk.usage.expect("usage present");
+        assert_eq!(raw.total_tokens, 0);
+        assert!(chunk.usage_presence.total);
+        assert_eq!(state.usage.as_ref().map(|u| u.total_tokens), Some(0));
+        assert!(state.usage_presence.total);
+    }
+
+    #[test]
+    fn responses_completed_positive_total_is_transmitted_intact() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":61,"output_tokens":18,"total_tokens":79}}}"#;
+
+        let chunk =
+            parse_responses_sse_stream_line(line, "chatcmpl_1", 123, "muse-spark", &mut state)
+                .expect("parse")
+                .expect("chunk");
+
+        assert_eq!(chunk.payload["usage"]["total_tokens"].as_u64(), Some(79));
+
+        let raw = chunk.usage.expect("usage present");
+        assert_eq!(raw.total_tokens, 79);
+        assert!(chunk.usage_presence.total);
+        assert_eq!(state.usage.as_ref().map(|u| u.total_tokens), Some(79));
+        assert!(state.usage_presence.total);
     }
 
     #[test]

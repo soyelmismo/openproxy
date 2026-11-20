@@ -13,7 +13,11 @@ pub(crate) fn build_anthropic_message_start_chunk(
     model: &str,
     data: &Value,
 ) -> UpstreamSseChunk {
-    let usage = data.get("message").and_then(|m| m.get("usage")).map(|u| {
+    let usage_block = data.get("message").and_then(|m| m.get("usage"));
+    let usage_presence = usage_block.map_or_else(openproxy_types::UsagePresence::none, |u| {
+        crate::dispatcher::translation::anthropic_usage_presence_in(u)
+    });
+    let usage = usage_block.map(|u| {
         let input_tokens = u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
         let output_tokens = u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
         let cache_read = u
@@ -54,6 +58,7 @@ pub(crate) fn build_anthropic_message_start_chunk(
         payload: chunk,
         done: false,
         usage,
+        usage_presence,
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: Vec::new(),
@@ -122,6 +127,7 @@ pub(crate) fn translate_anthropic_content_delta(
         payload: chunk,
         done: false,
         usage: None,
+        usage_presence: openproxy_types::UsagePresence::none(),
         stop_reason: None,
         delta_reasoning: None,
         delta_tool_calls: Vec::new(),
@@ -150,8 +156,11 @@ pub(crate) fn translate_anthropic_message_delta(
         _ => None,
     };
 
-    let usage = {
+    let (usage, usage_presence) = {
         let usage_block = data.get("usage");
+        let usage_presence = usage_block.map_or_else(openproxy_types::UsagePresence::none, |u| {
+            crate::dispatcher::translation::anthropic_usage_presence_in(u)
+        });
         let input_present = usage_block.and_then(|u| u.get("input_tokens")).is_some();
         let output_tokens = usage_block
             .and_then(|u| u.get("output_tokens"))
@@ -175,23 +184,29 @@ pub(crate) fn translate_anthropic_message_delta(
                 .saturating_add(cache_read)
                 .saturating_add(cache_creation);
             let total = prompt_total.saturating_add(output_tokens);
-            Some(OpenAIUsage {
-                prompt_tokens: u32::try_from(prompt_total).unwrap_or(u32::MAX),
-                completion_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
-                total_tokens: u32::try_from(total).unwrap_or(u32::MAX),
-                prompt_tokens_details: Some(PromptTokensDetails {
-                    cached_tokens: u32::try_from(cache_read).ok(),
+            (
+                Some(OpenAIUsage {
+                    prompt_tokens: u32::try_from(prompt_total).unwrap_or(u32::MAX),
+                    completion_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
+                    total_tokens: u32::try_from(total).unwrap_or(u32::MAX),
+                    prompt_tokens_details: Some(PromptTokensDetails {
+                        cached_tokens: u32::try_from(cache_read).ok(),
+                    }),
                 }),
-            })
+                usage_presence,
+            )
         } else if output_tokens > 0 {
-            Some(OpenAIUsage {
-                prompt_tokens: 0,
-                completion_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
-                total_tokens: 0,
-                prompt_tokens_details: None,
-            })
+            (
+                Some(OpenAIUsage {
+                    prompt_tokens: 0,
+                    completion_tokens: u32::try_from(output_tokens).unwrap_or(u32::MAX),
+                    total_tokens: 0,
+                    prompt_tokens_details: None,
+                }),
+                usage_presence,
+            )
         } else {
-            None
+            (None, usage_presence)
         }
     };
 
@@ -211,6 +226,7 @@ pub(crate) fn translate_anthropic_message_delta(
         payload: chunk,
         done: true,
         usage,
+        usage_presence,
         stop_reason: stop_reason.map(std::string::ToString::to_string),
         delta_reasoning: None,
         delta_tool_calls: Vec::new(),

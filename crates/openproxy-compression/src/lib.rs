@@ -5,6 +5,7 @@ pub mod content_router;
 pub mod diff_compressor;
 pub mod lite;
 pub mod log_compressor;
+mod prompt_template;
 pub mod rtk;
 pub mod smart_crusher;
 pub mod stats;
@@ -17,6 +18,7 @@ pub use compression::{
 };
 pub use stats::CompressionStats;
 pub use token_estimate::{
-    estimate_completion_tokens, estimate_prompt_tokens, message_content_to_text,
+    PromptRail, estimate_completion_tokens, estimate_prompt_tokens,
+    estimate_request_prompt_tokens_for_rail, message_content_to_text,
 };
 pub use visitor::mutate_message_text;

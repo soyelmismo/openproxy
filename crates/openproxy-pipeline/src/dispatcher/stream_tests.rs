@@ -357,3 +357,211 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
                 .all(|c| c != &crate::pipeline::SSE_DONE_BYTES[..])
     );
 }
+
+/// `stream=false` fixture: the pipeline uses a `Discard` sink, so the
+/// dispatcher must materialize the client response from the accumulated SSE
+/// while keeping the recorded usage raw.
+async fn run_discard_sse_fixture(
+    provider_id: &str,
+    trace_id: &str,
+    response: &str,
+    prefix: Option<&str>,
+) -> (
+    crate::pipeline::PipelineResult,
+    std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
+) {
+    let base_url = spawn_single_sse_server(response.to_string()).await;
+    let (_pool, conn_arc, _path) = fresh_pool();
+    seed_stream_provider(&conn_arc, provider_id, &base_url);
+    let mut dispatcher = build_dispatcher_for_stream_test(std::sync::Arc::clone(&conn_arc));
+    // Keep a live receiver so `record()` admits the usage job instead of
+    // failing on a closed worker; the test drains it below.
+    let (job_tx, mut job_rx) = tokio::sync::mpsc::channel(16);
+    dispatcher.tracker.background_tx = job_tx;
+
+    let (_pid, model, target, combo) = make_stream_test_entities(provider_id, "g-2.5");
+    let mut req =
+        make_stream_pipeline_request("g-2.5", false, Some(crate::race_sink::StreamSink::Discard));
+    if let Some(prefix) = prefix {
+        *req.active_system_prefix.lock() = Some(prefix.to_string());
+    }
+    req.openai_request = std::sync::Arc::new(openproxy_types::OpenAIRequest {
+        messages: vec![openproxy_types::OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(serde_json::Value::String("hello".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        }],
+        ..(*req.openai_request).clone()
+    });
+
+    let started = std::time::Instant::now();
+    let params = StreamDispatchParams {
+        target: &target,
+        combo: &combo,
+        req,
+        model: &model,
+        target_format: openproxy_types::TargetFormat::Openai,
+        resolved_timeouts: &crate::timeouts::Timeouts::from_config(
+            &openproxy_types::config::TimeoutsConfig::default(),
+        ),
+        started,
+        attempt: 1,
+        race_size: 1,
+        trace_id: trace_id.to_string(),
+        upstream_request: openproxy_adapters::upstream::UpstreamRequest::post_json(
+            format!("{base_url}/v1/chat/completions"),
+            bytes::Bytes::from(r#"{"model":"g-2.5","messages":[],"stream":true}"#),
+        ),
+    };
+    let result = dispatcher.dispatch_upstream_streaming(params).await;
+
+    while let Ok(job) = job_rx.try_recv() {
+        crate::worker::process_job(&conn_arc, job).expect("usage job must persist");
+    }
+    (result, conn_arc)
+}
+
+fn sse_with_final_usage(usage: serde_json::Value) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+         data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"g-2.5\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"hello\"}},\"finish_reason\":null}}]}}\n\n\
+         data: {{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"g-2.5\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}],\"usage\":{usage}}}\n\n\
+         data: [DONE]\n\n"
+    )
+}
+
+fn recorded_prompt_and_completion(
+    conn: &std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
+) -> (i64, i64) {
+    let conn = conn.lock();
+    conn.query_row(
+        "SELECT prompt_tokens, completion_tokens FROM usage ORDER BY id DESC LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("a usage row must be persisted")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn discard_stream_applies_prefix_discount_to_final_response_only() {
+    let prefix = "SYSTEM PREFIX ".repeat(64);
+    let expected_prefix = {
+        let msg = [openproxy_types::OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(serde_json::Value::String(prefix.clone())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        }];
+        openproxy_compression::token_estimate::estimate_prompt_tokens(&msg, Some("g-2.5"))
+    };
+    assert!(
+        expected_prefix > 0 && expected_prefix < 1000,
+        "fixture prefix must be non-zero and smaller than the upstream prompt"
+    );
+
+    let response = sse_with_final_usage(serde_json::json!({
+        "prompt_tokens": 1000,
+        "completion_tokens": 10,
+        "total_tokens": 1010
+    }));
+    let (result, conn_arc) = run_discard_sse_fixture(
+        "discard-prefix",
+        "t-discard-prefix",
+        &response,
+        Some(&prefix),
+    )
+    .await;
+
+    assert!(
+        result.error.is_none(),
+        "expected success: {:?}",
+        result.error
+    );
+    assert_eq!(result.status_code, 200);
+    let final_response = result
+        .final_response
+        .expect("a Discard sink must materialize the client response");
+    let usage = final_response.usage.expect("final response usage");
+    assert_eq!(
+        usage.prompt_tokens,
+        1000 - expected_prefix,
+        "the client copy must discount the injected prefix"
+    );
+    assert_eq!(usage.completion_tokens, 10);
+    assert_eq!(
+        usage.total_tokens,
+        usage.prompt_tokens + usage.completion_tokens,
+        "the client total must be recomputed after the discount"
+    );
+
+    // The record is the raw upstream observation, asserted independently of
+    // the response copy above.
+    let (recorded_prompt, recorded_completion) = recorded_prompt_and_completion(&conn_arc);
+    assert_eq!(
+        recorded_prompt, 1000,
+        "the SQLite row must keep the undiscounted upstream prompt"
+    );
+    assert_eq!(recorded_completion, 10);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn discard_stream_does_not_discount_an_estimated_prompt() {
+    // Upstream omitted prompt_tokens, so the response prompt is an estimate
+    // over the original request, which never contained the injected prefix.
+    // Subtracting the prefix there would invent a discount that was not billed.
+    let prefix = "SYSTEM PREFIX ".repeat(64);
+    let response = sse_with_final_usage(serde_json::json!({
+        "completion_tokens": 10,
+        "total_tokens": 10
+    }));
+    let (result, conn_arc) = run_discard_sse_fixture(
+        "discard-estimated-prompt",
+        "t-discard-estimated-prompt",
+        &response,
+        Some(&prefix),
+    )
+    .await;
+
+    assert!(
+        result.error.is_none(),
+        "expected success: {:?}",
+        result.error
+    );
+    let final_response = result
+        .final_response
+        .expect("a Discard sink must materialize the client response");
+    let usage = final_response.usage.expect("final response usage");
+    assert!(
+        usage.prompt_tokens > 0,
+        "an estimated prompt must not be reduced to zero by a prefix it never contained"
+    );
+    let prefix_tokens = {
+        let msg = [openproxy_types::OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(serde_json::Value::String(prefix.clone())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        }];
+        openproxy_compression::token_estimate::estimate_prompt_tokens(&msg, Some("g-2.5"))
+    };
+    assert!(
+        usage.prompt_tokens < prefix_tokens,
+        "the fixture only proves the gate when the estimate is smaller than the prefix"
+    );
+    assert_eq!(usage.completion_tokens, 10);
+
+    let (recorded_prompt, recorded_completion) = recorded_prompt_and_completion(&conn_arc);
+    assert_eq!(
+        recorded_prompt,
+        i64::from(usage.prompt_tokens),
+        "the recorded estimate must match the client copy when no discount applies"
+    );
+    assert_eq!(recorded_completion, 10);
+}

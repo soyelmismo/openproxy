@@ -4,10 +4,10 @@ use openproxy_types::OpenAIMessage;
 #[test]
 fn text_accounting_is_bpe_not_char_division() {
     // cl100k_base encodes this to two tokens, not ceil(11 / 4) = three.
-    assert_eq!(estimate_completion_tokens("Hello world"), 2);
+    assert_eq!(estimate_completion_tokens("Hello world", None), 2);
     // A Chinese sentence demonstrates why characters/2 is not tokenization.
-    assert_eq!(estimate_completion_tokens("你好世界"), 5);
-    assert_eq!(estimate_completion_tokens("<|endoftext|>"), 7);
+    assert_eq!(estimate_completion_tokens("你好世界", None), 5);
+    assert_eq!(estimate_completion_tokens("<|endoftext|>", None), 7);
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn compression_reports_bpe_savings_not_character_savings() -> Result<(), serde_j
     assert!(stats.compressed_chars < stats.original_chars);
     assert_eq!(
         stats.compressed_tokens,
-        estimate_prompt_tokens(&messages) as usize
+        estimate_prompt_tokens(&messages, None) as usize
     );
     Ok(())
 }
@@ -44,7 +44,7 @@ fn message_tool_names_and_reasoning_are_counted() -> Result<(), serde_json::Erro
             "name": "search_invoice_archive", "arguments": "{}"
         }}]
     }))?;
-    assert!(estimate_prompt_tokens(&[rich]) > estimate_prompt_tokens(&[plain]) + 10);
+    assert!(estimate_prompt_tokens(&[rich], None) > estimate_prompt_tokens(&[plain], None) + 10);
     Ok(())
 }
 
@@ -58,13 +58,13 @@ fn request_accounting_includes_tools_and_output_schema_but_not_controls()
         "tools": [{"type":"function", "function":{"name":"lookup", "description": "search every invoice".repeat(100), "parameters":{"type":"object", "properties":{"query":{"type":"string"}}}}}],
         "response_format":{"type":"json_schema", "json_schema":{"name":"result", "schema":{"type":"object", "properties":{"answer":{"type":"string"}}}}}
     }))?;
-    let full = estimate_request_prompt_tokens(&request);
-    assert!(full > estimate_prompt_tokens(&request.messages) + 100);
+    let full = estimate_request_prompt_tokens(&request, None);
+    assert!(full > estimate_prompt_tokens(&request.messages, None) + 100);
     let mut control = request;
     control.model = "another-model".into();
     control.max_tokens = Some(130000);
     control.temperature = Some(0.9);
-    assert_eq!(estimate_request_prompt_tokens(&control), full);
+    assert_eq!(estimate_request_prompt_tokens(&control, None), full);
     Ok(())
 }
 
@@ -73,6 +73,6 @@ fn images_are_not_counted_as_base64_text() -> Result<(), serde_json::Error> {
     let message: OpenAIMessage = serde_json::from_value(serde_json::json!({
         "role":"user", "content":[{"type":"image_url", "image_url":{"url":format!("data:image/png;base64,{}", "A".repeat(100000))}}]
     }))?;
-    assert_eq!(estimate_prompt_tokens(&[message]), 804);
+    assert_eq!(estimate_prompt_tokens(&[message], None), 804);
     Ok(())
 }

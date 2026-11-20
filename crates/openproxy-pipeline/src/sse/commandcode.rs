@@ -19,6 +19,7 @@ pub struct CommandCodeSseState {
     pub tool_calls_streamed: Vec<bool>,
     pub last_finish_step_reason: Option<String>,
     pub last_finish_step_usage: Option<OpenAIUsage>,
+    pub last_finish_step_usage_presence: openproxy_types::UsagePresence,
 }
 
 fn map_commandcode_finish_reason(reason: &str) -> String {
@@ -250,6 +251,7 @@ pub fn parse_commandcode_sse_line(
                 payload,
                 done: false,
                 usage: None,
+                usage_presence: openproxy_types::UsagePresence::none(),
                 stop_reason: None,
                 delta_reasoning: None,
                 delta_tool_calls: vec![tool_call],
@@ -264,45 +266,53 @@ pub fn parse_commandcode_sse_line(
                 .and_then(Value::as_str)
                 .map(map_commandcode_finish_reason);
 
-            let usage = val
-                .get("totalUsage")
-                .or_else(|| val.get("usage"))
-                .map(|u| {
-                    let prompt = u
-                        .get("promptTokens")
-                        .or_else(|| u.get("prompt_tokens"))
-                        .or_else(|| u.get("inputTokens"))
-                        .and_then(Value::as_u64);
-                    let completion = u
-                        .get("completionTokens")
-                        .or_else(|| u.get("completion_tokens"))
-                        .or_else(|| u.get("outputTokens"))
-                        .and_then(Value::as_u64);
-                    let total = u
-                        .get("totalTokens")
-                        .or_else(|| u.get("total_tokens"))
-                        .and_then(Value::as_u64)
-                        .or_else(|| match (prompt, completion) {
-                            (Some(p), Some(c)) => Some(p + c),
-                            (Some(p), None) => Some(p),
-                            (None, Some(c)) => Some(c),
-                            _ => None,
-                        });
-                    let cached = u
-                        .get("cachedInputTokens")
-                        .or_else(|| {
-                            u.get("inputTokenDetails")
-                                .and_then(|d| d.get("cacheReadTokens"))
-                        })
-                        .and_then(Value::as_u64)
-                        .and_then(|c| u32::try_from(c).ok());
-                    let prompt_details =
-                        cached.map(|c| openproxy_types::message::PromptTokensDetails {
-                            cached_tokens: Some(c),
-                        });
-                    super::build_openai_usage(prompt, completion, total, prompt_details)
-                })
-                .or_else(|| state.last_finish_step_usage.take());
+            let usage_raw = val.get("totalUsage").or_else(|| val.get("usage"));
+            let usage_presence = usage_raw.map_or_else(
+                openproxy_types::UsagePresence::none,
+                crate::dispatcher::translation::commandcode_usage_presence_in,
+            );
+            let usage = usage_raw.map(|u| {
+                let prompt = u
+                    .get("promptTokens")
+                    .or_else(|| u.get("prompt_tokens"))
+                    .or_else(|| u.get("inputTokens"))
+                    .and_then(Value::as_u64);
+                let completion = u
+                    .get("completionTokens")
+                    .or_else(|| u.get("completion_tokens"))
+                    .or_else(|| u.get("outputTokens"))
+                    .and_then(Value::as_u64);
+                let total = u
+                    .get("totalTokens")
+                    .or_else(|| u.get("total_tokens"))
+                    .and_then(Value::as_u64)
+                    .or_else(|| match (prompt, completion) {
+                        (Some(p), Some(c)) => Some(p + c),
+                        (Some(p), None) => Some(p),
+                        (None, Some(c)) => Some(c),
+                        _ => None,
+                    });
+                let cached = u
+                    .get("cachedInputTokens")
+                    .or_else(|| {
+                        u.get("inputTokenDetails")
+                            .and_then(|d| d.get("cacheReadTokens"))
+                    })
+                    .and_then(Value::as_u64)
+                    .and_then(|c| u32::try_from(c).ok());
+                let prompt_details =
+                    cached.map(|c| openproxy_types::message::PromptTokensDetails {
+                        cached_tokens: Some(c),
+                    });
+                super::build_openai_usage(prompt, completion, total, prompt_details)
+            });
+            let (usage, usage_presence) = match usage {
+                Some(u) => (Some(u), usage_presence),
+                None => (
+                    state.last_finish_step_usage.take(),
+                    state.last_finish_step_usage_presence,
+                ),
+            };
 
             if let Some(step_reason) = state.last_finish_step_reason.take()
                 && (finish_reason.is_none()
@@ -334,6 +344,7 @@ pub fn parse_commandcode_sse_line(
                 payload,
                 done: true,
                 usage,
+                usage_presence,
                 stop_reason: Some(finish_reason),
                 delta_reasoning: None,
                 delta_tool_calls: Vec::new(),
@@ -348,7 +359,12 @@ pub fn parse_commandcode_sse_line(
                 .and_then(Value::as_str)
                 .map(map_commandcode_finish_reason);
 
-            let usage = val.get("totalUsage").or_else(|| val.get("usage")).map(|u| {
+            let usage_raw = val.get("totalUsage").or_else(|| val.get("usage"));
+            let usage_presence = usage_raw.map_or_else(
+                openproxy_types::UsagePresence::none,
+                crate::dispatcher::translation::commandcode_usage_presence_in,
+            );
+            let usage = usage_raw.map(|u| {
                 let prompt = u
                     .get("promptTokens")
                     .or_else(|| u.get("prompt_tokens"))
@@ -389,6 +405,7 @@ pub fn parse_commandcode_sse_line(
             }
             if let Some(u) = usage {
                 state.last_finish_step_usage = Some(u);
+                state.last_finish_step_usage_presence = usage_presence;
             }
 
             Ok(None)

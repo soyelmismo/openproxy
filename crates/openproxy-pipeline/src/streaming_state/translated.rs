@@ -159,6 +159,7 @@ impl ChunkProcessor<'_> {
             ctx,
             self.state,
             chunk.usage.take(),
+            chunk.usage_presence,
             chunk.stop_reason.take(),
             true,
         );
@@ -167,9 +168,10 @@ impl ChunkProcessor<'_> {
             let _ = self.send_to_sink(ctx, sse_bytes).await;
         }
 
-        // Forward authoritative merged usage to client in the terminal chunk payload
-        // if the chunk payload doesn't already have usage and state has merged usage.
-        if let Some(u) = &self.state.usage
+        // Forward the client-facing merged usage (prefix discount applied) in
+        // the terminal chunk payload if the chunk payload doesn't already have
+        // usage. `state.usage` itself stays raw for the usage record.
+        if let Some(u) = &self.state.client_usage
             && let Some(obj) = chunk.payload.as_object_mut()
             && !obj.contains_key("usage")
             && let Ok(u_val) = serde_json::to_value(u)
@@ -220,6 +222,18 @@ impl ChunkProcessor<'_> {
         // is telling the body stream that the request is alive, which moves
         // the wait off the TTFT deadline onto the idle-chunk budget.
         if chunk.is_liveness() {
+            // A usage-only metadata frame is never forwarded, but the counters
+            // it reported belong to the request: fold them (with their parsed
+            // presence) so a later missing field is estimated instead of being
+            // billed as an observed zero.
+            Self::sync_chunk_metadata_to_accumulator(
+                ctx,
+                self.state,
+                chunk.usage.take(),
+                chunk.usage_presence,
+                None,
+                false,
+            );
             stream.note_progress_chunk();
             return Ok(crate::streaming::ChunkEvent::Skip);
         }
@@ -227,6 +241,7 @@ impl ChunkProcessor<'_> {
             ctx,
             self.state,
             chunk.usage.take(),
+            chunk.usage_presence,
             chunk.stop_reason.take(),
             false,
         );
